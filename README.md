@@ -1,5 +1,7 @@
 # Conveyor
 
+[![CI](https://github.com/aguxizzz/conveyor/actions/workflows/ci.yml/badge.svg)](https://github.com/aguxizzz/conveyor/actions/workflows/ci.yml)
+
 A distributed background-job queue for the JVM, backed only by PostgreSQL.
 
 Enqueue work over HTTP (or from Java), and any number of worker instances pick it up, run it with
