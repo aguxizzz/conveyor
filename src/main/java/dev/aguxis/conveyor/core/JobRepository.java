@@ -60,7 +60,11 @@ public class JobRepository {
 	 * <p>
 	 * {@code FOR UPDATE SKIP LOCKED} lets many workers poll the same queue concurrently without
 	 * blocking on, or double-claiming, each other's rows. Jobs whose lease expired (worker crashed or
-	 * stalled) are runnable again.
+	 * stalled) are first put back to {@code PENDING}, so they're runnable again in their normal order.
+	 * <p>
+	 * Expired leases are handled in their own statement on purpose: with an {@code OR} of both cases in
+	 * one query, Postgres can't read {@code jobs_ready_idx} in order and stop at {@code limit}; it scans
+	 * and sorts the whole backlog on every claim, which made claims slower the further behind the queue was.
 	 */
 	@Transactional
 	public List<Job> claim(String queue, String workerId, int limit, Duration lease) {

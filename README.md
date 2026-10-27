@@ -53,7 +53,7 @@ PENDING ──claim──► RUNNING ──success──► SUCCEEDED
 ## Quick start
 
 ```bash
-docker compose up --build          # Postgres, 2 competing workers (:8080, :8081), Prometheus, Grafana
+docker compose up --build          # Postgres, 2 competing workers (:8080 + next free port), Prometheus, Grafana
 
 curl -X POST localhost:8080/api/jobs -H 'Content-Type: application/json' \
   -d '{"type":"demo.flaky","payload":{"failRate":0.6},"maxAttempts":5}'
