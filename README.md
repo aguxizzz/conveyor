@@ -8,7 +8,7 @@ Enqueue work over HTTP (or from Java), and any number of worker instances pick i
 retries and exponential backoff, and survive crashes, without Redis, Kafka or RabbitMQ.
 Postgres is already in most stacks; Conveyor makes it your job queue.
 
-**Stack:** Java 17 · Spring Boot 4 · PostgreSQL 17 · Flyway · JdbcClient · Testcontainers · Docker · GitHub Actions
+**Stack:** Java 17 · Spring Boot 4 · PostgreSQL 17 · Flyway · JdbcClient · Micrometer · Prometheus · Grafana · Testcontainers · Docker · GitHub Actions
 
 ## Features
 
@@ -21,6 +21,8 @@ Postgres is already in most stacks; Conveyor makes it your job queue.
 - **Retries with full-jitter exponential backoff** and a dead-letter state (`DEAD`) with manual revive.
 - **Idempotent enqueue** via `idempotencyKey`: clients can safely retry the enqueue request itself.
 - **Priorities, delayed jobs, multiple queues**, and bounded concurrency per worker.
+- **Observability**: Micrometer metrics scraped by Prometheus, with a provisioned Grafana dashboard
+  (throughput, backlog, pickup latency, execution time, worker utilization).
 - **Database time only**: all scheduling uses Postgres `now()`, so clock skew between hosts doesn't matter.
 
 ## Architecture
@@ -51,7 +53,7 @@ PENDING ──claim──► RUNNING ──success──► SUCCEEDED
 ## Quick start
 
 ```bash
-docker compose up --build          # Postgres + 2 competing worker instances (ports 8080, 8081)
+docker compose up --build          # Postgres, 2 competing workers (:8080, :8081), Prometheus, Grafana
 
 curl -X POST localhost:8080/api/jobs -H 'Content-Type: application/json' \
   -d '{"type":"demo.flaky","payload":{"failRate":0.6},"maxAttempts":5}'
@@ -59,6 +61,31 @@ curl -X POST localhost:8080/api/jobs -H 'Content-Type: application/json' \
 curl localhost:8080/api/jobs?status=DEAD
 curl localhost:8080/api/queues
 ```
+
+Then generate some load and watch it in Grafana at http://localhost:3000 (no login):
+
+```bash
+scripts/load.sh 30 120             # 30 jobs/s for 2 minutes; try 100 to see the backlog build up
+```
+
+## Metrics
+
+Exposed at `/actuator/prometheus`. Two sources, on purpose:
+
+| Metric | Source | What it answers |
+|--------|--------|-----------------|
+| `conveyor_job_execution_seconds` (histogram; `queue`, `type`, `outcome`) | each worker | Throughput, failure rate and p95 per job type. `outcome` is `succeeded`, `retried`, `dead` or `lost` (finished after its lease was taken over). |
+| `conveyor_job_pickup_latency_seconds` (histogram; `queue`) | each worker | How long a runnable job waits before a worker claims it. |
+| `conveyor_worker_in_flight`, `conveyor_worker_concurrency` | each worker | Utilization: are workers saturated? |
+| `conveyor_queue_jobs` (`queue`, `status`) | Postgres | Backlog by status. |
+| `conveyor_queue_oldest_ready_age_seconds` (`queue`) | Postgres | The alerting signal: grows without bound when workers can't keep up. |
+
+Worker metrics are per process and get summed across instances. Queue metrics come from the shared
+table, so every instance reports the same value (dashboards use `max`); they're refreshed every 15s
+rather than on each scrape, so scrapes never turn into database load. Pickup latency is computed from
+two Postgres timestamps (`run_at` and the claim's `now()`), so it's immune to clock skew too. The
+`type` tag only takes values that have a registered handler (anything else becomes `unknown`):
+job types are client input, and must not be able to create unbounded time series.
 
 ## API
 
@@ -93,12 +120,13 @@ Integration tests run against a real Postgres via Testcontainers (Docker require
 
 They cover: 4 competing workers × 300 jobs, each run exactly once; lease expiry and recovery
 after a simulated crash; fencing of a stale worker; heartbeats keeping long jobs leased;
-retries, dead-lettering, delayed jobs and idempotent enqueue.
+retries, dead-lettering, delayed jobs and idempotent enqueue; recorded metrics per outcome
+(including a fenced-off attempt), and the full app exposing them through `/actuator/prometheus`.
 
 ## Roadmap
 
 - [ ] `LISTEN/NOTIFY` wake-ups (sub-millisecond pickup without tight polling)
-- [ ] Micrometer metrics + Prometheus/Grafana dashboard
+- [x] Micrometer metrics + Prometheus/Grafana dashboard
 - [ ] Recurring (cron) jobs with single-leader scheduling
 - [ ] Web dashboard
 - [ ] Load test & benchmark write-up (jobs/sec vs. worker count)
