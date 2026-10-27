@@ -22,8 +22,9 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/conveyor
     deploy:
       replicas: 2
+    # Each replica takes the first free host port in the range (8081 is often taken by Metro/Expo).
     ports:
-      - "8080-8081:8080"
+      - "8080-8089:8080"
 
   prometheus:
     image: prom/prometheus:v3.4.1
