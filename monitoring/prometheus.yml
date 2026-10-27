@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: conveyor
+    metrics_path: /actuator/prometheus
+    # "worker" resolves to every replica of the compose service, so scaling it needs no config change.
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 8080

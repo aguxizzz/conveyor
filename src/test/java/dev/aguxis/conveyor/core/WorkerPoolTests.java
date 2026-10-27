@@ -10,6 +10,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,7 @@ class WorkerPoolTests {
 	JdbcClient jdbc;
 
 	private final List<WorkerPool> pools = new ArrayList<>();
+	private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
 	@BeforeEach
 	void cleanDatabase() {
@@ -170,6 +173,44 @@ class WorkerPoolTests {
 		awaitStatus(job.id(), JobStatus.SUCCEEDED);
 	}
 
+	@Test
+	void recordsExecutionOutcomesAndPickupLatency() {
+		var calls = new AtomicInteger();
+		startPool("w1", 1, handler("ok", job -> {
+		}), handler("flaky", job -> {
+			if (calls.incrementAndGet() == 1) {
+				throw new IllegalStateException("boom");
+			}
+		}));
+
+		jobs.enqueue(NewJob.of("ok", "{}"));
+		jobs.enqueue(NewJob.of("flaky", "{}"));
+		jobs.enqueue(NewJob.of("nobody.handles.this", "{}"));
+
+		// Outcomes are recorded right after the DB update, so wait on the meters, not on job status.
+		await(() -> executions("ok", "succeeded") == 1 && executions("flaky", "retried") == 1
+				&& executions("flaky", "succeeded") == 1 && executions("unknown", "dead") == 1, Duration.ofSeconds(10));
+		assertThat(meters.get("conveyor.job.pickup.latency").timer().count()).isEqualTo(4);
+		assertThat(meters.get("conveyor.worker.concurrency").tag("worker", "w1").gauge().value()).isEqualTo(1);
+	}
+
+	@Test
+	void fencedOffAttemptIsRecordedAsLost() {
+		Job job = jobs.enqueue(NewJob.of("slow", "{}"));
+		var started = new AtomicInteger();
+		// Short lease and no heartbeat during the run: the lease expires mid-job and someone else takes over.
+		startPool("a", 1, Duration.ofMillis(200), Duration.ofSeconds(30), handler("slow", j -> {
+			started.incrementAndGet();
+			Thread.sleep(800);
+		}));
+		await(() -> started.get() == 1, Duration.ofSeconds(5));
+		sleep(Duration.ofMillis(300));
+		jobs.claim("default", "thief", 1, Duration.ofSeconds(30));
+
+		await(() -> executions("slow", "lost") == 1, Duration.ofSeconds(5));
+		assertThat(jobs.findById(job.id()).orElseThrow().lockedBy()).isEqualTo("thief");
+	}
+
 	// --- helpers ---------------------------------------------------------------------------------
 
 	@FunctionalInterface
@@ -198,7 +239,7 @@ class WorkerPoolTests {
 	private void startPool(String id, int concurrency, Duration lease, Duration heartbeat, JobHandler... handlers) {
 		var settings = new WorkerPool.Settings(id, "default", concurrency, Duration.ofMillis(20), lease, heartbeat,
 				Duration.ofSeconds(5));
-		var pool = new WorkerPool(jobs, new JobHandlerRegistry(List.of(handlers)), FAST_RETRY, settings);
+		var pool = new WorkerPool(jobs, new JobHandlerRegistry(List.of(handlers)), FAST_RETRY, settings, meters);
 		pools.add(pool);
 		pool.start();
 	}
@@ -206,6 +247,11 @@ class WorkerPoolTests {
 	private Job awaitStatus(long id, JobStatus status) {
 		await(() -> jobs.findById(id).orElseThrow().status() == status, Duration.ofSeconds(10));
 		return jobs.findById(id).orElseThrow();
+	}
+
+	private long executions(String type, String outcome) {
+		Timer timer = meters.find("conveyor.job.execution").tags("type", type, "outcome", outcome).timer();
+		return timer == null ? 0 : timer.count();
 	}
 
 	private long countByStatus(JobStatus status) {

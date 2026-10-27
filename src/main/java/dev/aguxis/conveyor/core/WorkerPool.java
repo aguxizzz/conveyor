@@ -11,9 +11,12 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
+
+import dev.aguxis.conveyor.core.WorkerMetrics.Outcome;
 
 /**
  * Polls one queue and runs claimed jobs on a bounded thread pool.
@@ -41,6 +44,7 @@ public class WorkerPool implements SmartLifecycle {
 	private final JobHandlerRegistry handlers;
 	private final RetryPolicy retryPolicy;
 	private final Settings settings;
+	private final WorkerMetrics metrics;
 	private final Map<Long, Job> inFlight = new ConcurrentHashMap<>();
 	private final Object capacityChanged = new Object();
 
@@ -49,11 +53,13 @@ public class WorkerPool implements SmartLifecycle {
 	private ExecutorService executor;
 	private ScheduledExecutorService heartbeats;
 
-	public WorkerPool(JobRepository jobs, JobHandlerRegistry handlers, RetryPolicy retryPolicy, Settings settings) {
+	public WorkerPool(JobRepository jobs, JobHandlerRegistry handlers, RetryPolicy retryPolicy, Settings settings,
+			MeterRegistry meterRegistry) {
 		this.jobs = jobs;
 		this.handlers = handlers;
 		this.retryPolicy = retryPolicy;
 		this.settings = settings;
+		this.metrics = new WorkerMetrics(meterRegistry, this, settings);
 	}
 
 	@Override
@@ -115,6 +121,7 @@ public class WorkerPool implements SmartLifecycle {
 				}
 				List<Job> claimed = jobs.claim(settings.queue(), settings.workerId(), free, settings.lease());
 				for (Job job : claimed) {
+					metrics.claimed(job);
 					inFlight.put(job.id(), job);
 					executor.execute(() -> run(job));
 				}
@@ -136,7 +143,7 @@ public class WorkerPool implements SmartLifecycle {
 
 	private void run(Job job) {
 		try {
-			execute(job);
+			execute(job, System.nanoTime());
 		}
 		catch (Exception e) {
 			// Reporting the outcome failed (e.g. DB down); the lease will expire and the job gets retried.
@@ -150,34 +157,44 @@ public class WorkerPool implements SmartLifecycle {
 		}
 	}
 
-	private void execute(Job job) {
+	private void execute(Job job, long startNanos) {
 		if (job.attempts() > job.maxAttempts()) {
 			// Only reachable when previous attempts died without reporting back (lease expiry).
-			jobs.markDead(job, "Exceeded max attempts after lease expiry");
+			boolean recorded = jobs.markDead(job, "Exceeded max attempts after lease expiry");
+			metrics.finished(knownType(job), recorded ? Outcome.DEAD : Outcome.LOST, startNanos);
 			return;
 		}
 		var handler = handlers.find(job.type());
 		if (handler.isEmpty()) {
-			jobs.markDead(job, "No handler registered for type '" + job.type() + "'");
+			boolean recorded = jobs.markDead(job, "No handler registered for type '" + job.type() + "'");
+			metrics.finished(knownType(job), recorded ? Outcome.DEAD : Outcome.LOST, startNanos);
 			return;
 		}
+		Outcome outcome;
 		try {
 			handler.get().handle(job);
+			outcome = jobs.complete(job) ? Outcome.SUCCEEDED : Outcome.LOST;
 		}
 		catch (Exception e) {
 			String error = truncate(e.getClass().getName() + ": " + e.getMessage());
 			if (job.attemptsExhausted()) {
 				log.warn("Job {} ({}) is dead after {} attempts: {}", job.id(), job.type(), job.attempts(), error);
-				jobs.markDead(job, error);
+				outcome = jobs.markDead(job, error) ? Outcome.DEAD : Outcome.LOST;
 			}
 			else {
-				jobs.reschedule(job, error, retryPolicy.delayFor(job.attempts()));
+				outcome = jobs.reschedule(job, error, retryPolicy.delayFor(job.attempts())) ? Outcome.RETRIED
+						: Outcome.LOST;
 			}
-			return;
 		}
-		if (!jobs.complete(job)) {
+		if (outcome == Outcome.LOST) {
 			log.warn("Job {} finished but its lease was lost; another attempt owns it now", job.id());
 		}
+		metrics.finished(job.type(), outcome, startNanos);
+	}
+
+	/** Job type for metric tags: only types with a handler, so clients can't create arbitrary series. */
+	private String knownType(Job job) {
+		return handlers.find(job.type()).isPresent() ? job.type() : "unknown";
 	}
 
 	private void heartbeat() {

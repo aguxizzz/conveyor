@@ -187,13 +187,16 @@ public class JobRepository {
 				       count(*) FILTER (WHERE status = 'PENDING')   AS pending,
 				       count(*) FILTER (WHERE status = 'RUNNING')   AS running,
 				       count(*) FILTER (WHERE status = 'SUCCEEDED') AS succeeded,
-				       count(*) FILTER (WHERE status = 'DEAD')      AS dead
+				       count(*) FILTER (WHERE status = 'DEAD')      AS dead,
+				       coalesce(extract(epoch FROM now() - min(run_at)
+				                FILTER (WHERE status = 'PENDING' AND run_at <= now())), 0) AS oldest_ready_seconds
 				  FROM jobs
 				 GROUP BY queue
 				 ORDER BY queue
 				""")
 				.query((rs, n) -> new QueueStats(rs.getString("queue"), rs.getLong("pending"),
-						rs.getLong("running"), rs.getLong("succeeded"), rs.getLong("dead")))
+						rs.getLong("running"), rs.getLong("succeeded"), rs.getLong("dead"),
+						rs.getDouble("oldest_ready_seconds")))
 				.list();
 	}
 
