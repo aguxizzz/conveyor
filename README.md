@@ -28,6 +28,8 @@ Postgres is already in most stacks; Conveyor makes it your job queue.
 - **Retention**: finished jobs are deleted after 7 days (`DEAD` after 30), in small batches that never
   block workers, so the table doesn't grow forever.
 - **Priorities, delayed jobs, multiple queues**, and bounded concurrency per worker.
+- **Web dashboard** at `/`: queue backlogs, a live job list filtered by status and queue, job details
+  with payload and last error, one-click revive of `DEAD` jobs, enqueueing, and schedules.
 - **Observability**: Micrometer metrics scraped by Prometheus, with a provisioned Grafana dashboard
   (throughput, backlog, pickup latency, execution time, worker utilization).
 - **Database time only**: all scheduling uses Postgres `now()`, so clock skew between hosts doesn't matter.
@@ -69,11 +71,26 @@ curl localhost:8080/api/jobs?status=DEAD
 curl localhost:8080/api/queues
 ```
 
-Then generate some load and watch it in Grafana at http://localhost:3000 (no login):
+Open the dashboard at http://localhost:8080. Then generate some load and watch it there, and in Grafana at http://localhost:3000 (no login):
 
 ```bash
 scripts/load.sh 30 120             # 30 jobs/s for 2 minutes; try 100 to see the backlog build up
 ```
+
+## Dashboard
+
+![Conveyor dashboard](docs/dashboard.png)
+
+Every instance serves the dashboard at `/`. It's three static files (`src/main/resources/static`) with
+no build step and no framework, using only the public API, so any instance shows the same queue: it
+all comes from the shared table.
+
+- Refreshes every 2 s, one round of requests at a time, and stops while the tab is hidden. An open job
+  refreshes too, so you can watch it go from `PENDING` to its outcome.
+- Clicking a queue count filters the job list. Filters live in the URL, so a view of, say, the dead jobs
+  in one queue can be bookmarked or shared.
+- Job types, payloads and errors are client input, so they're always inserted as text, never as HTML.
+- There's no authentication, as with the API itself: keep it on an internal network.
 
 ## Performance
 
@@ -251,6 +268,6 @@ The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbe
 - [x] `LISTEN/NOTIFY` wake-ups (~3 ms pickup without tight polling)
 - [x] Micrometer metrics + Prometheus/Grafana dashboard
 - [x] Recurring (cron) jobs with single-leader scheduling
-- [ ] Web dashboard
+- [x] Web dashboard
 - [x] Load test & benchmark write-up (jobs/sec vs. worker count)
 - [x] Retention: purge finished jobs in batches
