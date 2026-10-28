@@ -23,6 +23,8 @@ Postgres is already in most stacks; Conveyor makes it your job queue.
 - **Instant pickup with `LISTEN/NOTIFY`**: a trigger announces new jobs, so idle workers claim them in
   ~3 ms instead of waiting for their next poll. Polling stays as the safety net, so a missed
   notification only costs latency, never a job.
+- **Recurring jobs (cron)** with time zones, fired by a single elected leader. Leadership is a lease
+  with a fencing term, so a paused ex-leader can't fire, and a crashed leader is replaced within ~20 s.
 - **Priorities, delayed jobs, multiple queues**, and bounded concurrency per worker.
 - **Observability**: Micrometer metrics scraped by Prometheus, with a provisioned Grafana dashboard
   (throughput, backlog, pickup latency, execution time, worker utilization).
@@ -109,6 +111,39 @@ channel, outside the connection pool, and wakes the pool for the named queue.
   by ~27% in the benchmark (still twice the drain rate). `conveyor.worker.listen=false` turns the
   listener off.
 
+## Recurring jobs
+
+```bash
+curl -X PUT localhost:8080/api/schedules/nightly-report -H 'Content-Type: application/json' \
+  -d '{"cron":"0 0 3 * * *","timeZone":"America/Argentina/Buenos_Aires","type":"report","payload":{"format":"pdf"}}'
+
+curl localhost:8080/api/scheduler/leader     # {"holder":"host-1a2b3c4d","term":2,"expiresAt":"..."}
+```
+
+A schedule doesn't run anything itself: each time it's due, it enqueues an ordinary job, which then
+gets retries, leases and metrics like any other. Cron uses Spring's six-field format (seconds first)
+or `@hourly`/`@daily`/`@weekly`/`@monthly`, evaluated in the schedule's time zone (DST included).
+
+Every instance runs a scheduler, but only the **leader** fires:
+
+- **Leader election is a lease row** (`leader_leases`): one `INSERT … ON CONFLICT DO UPDATE` acquires
+  it if it's free or expired, or renews it for the current holder. The leader renews every 5 s
+  (a third of its 15 s lease); followers ask just as often, so a crashed leader is replaced within
+  ~20 s, and one that shuts down cleanly releases the lease for an immediate hand-off.
+- **Leadership alone isn't trusted.** A leader that pauses (GC, network) past its lease doesn't know it
+  was replaced. Every change of holder increments a `term`, a fencing token, and each firing is one
+  transaction that first locks the lease row `FOR SHARE` for that term. A stale term fires nothing;
+  and since taking over has to update that row, a new leader waits for a firing in progress to commit
+  instead of overlapping with it. The row is never deleted, so terms never start over.
+- **Each occurrence is one job**: due schedules are locked `FOR UPDATE SKIP LOCKED`, and the job's
+  idempotency key is `schedule:<name>:<due time>`, so even a repeated firing would enqueue nothing new.
+- **Missed firings are coalesced.** If no leader ran for 10 minutes, an every-minute schedule fires
+  once, late, and continues from the current time, rather than releasing a burst of 10 jobs.
+- All times come from Postgres, so the instances' clocks don't matter here either.
+
+`conveyor_scheduler_leader` is 1 on the leader, and `conveyor_scheduler_fired_total` counts jobs it
+enqueued. `conveyor.scheduler.enabled=false` keeps an instance out of the election.
+
 ## Metrics
 
 Exposed at `/actuator/prometheus`. Two sources, on purpose:
@@ -119,6 +154,7 @@ Exposed at `/actuator/prometheus`. Two sources, on purpose:
 | `conveyor_job_pickup_latency_seconds` (histogram; `queue`) | each worker | How long a runnable job waits before a worker claims it. |
 | `conveyor_worker_in_flight`, `conveyor_worker_concurrency` | each worker | Utilization: are workers saturated? |
 | `conveyor_listener_connected` | each worker | 0 means wake-ups are down and pickup falls back to the poll interval. |
+| `conveyor_scheduler_leader`, `conveyor_scheduler_fired_total` | each instance | Which instance fires schedules (exactly one should be 1), and how many jobs it enqueued. |
 | `conveyor_queue_jobs` (`queue`, `status`) | Postgres | Backlog by status. |
 | `conveyor_queue_oldest_ready_age_seconds` (`queue`) | Postgres | The alerting signal: grows without bound when workers can't keep up. |
 
@@ -138,6 +174,10 @@ job types are client input, and must not be able to create unbounded time series
 | GET    | `/api/jobs?status=&queue=&limit=` | List jobs                          |
 | POST   | `/api/jobs/{id}/retry`  | Revive a `DEAD` job                          |
 | GET    | `/api/queues`           | Per-queue counts by status                   |
+| PUT    | `/api/schedules/{name}` | Create or replace a schedule (`cron`, `timeZone`, `type`, `payload`, `queue`, `priority`, `maxAttempts`, `enabled`) |
+| GET    | `/api/schedules`, `/api/schedules/{name}` | List / get schedules, with `nextRunAt` and `lastRunAt` |
+| DELETE | `/api/schedules/{name}` | Delete a schedule                            |
+| GET    | `/api/scheduler/leader` | Current scheduler leader and term (404 if none) |
 
 ## Writing a handler
 
@@ -167,6 +207,10 @@ retries, dead-lettering, delayed jobs and idempotent enqueue; recorded metrics p
 Wake-up tests poll only once a minute, so a job finishing within seconds proves the notification
 path: new and revived jobs, queue filtering, and reconnecting after the listener's session is killed
 with `pg_terminate_backend`.
+Scheduler tests run three competing schedulers (one leads, every occurrence becomes exactly one job),
+hand-off on shutdown, takeover from a crashed leader's expired lease, a stale leader fenced off by
+its term, a takeover blocking until the old leader's firing commits, and an hour of missed firings
+coalesced into one.
 
 The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbenchmark=true`.
 
@@ -174,7 +218,7 @@ The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbe
 
 - [x] `LISTEN/NOTIFY` wake-ups (~3 ms pickup without tight polling)
 - [x] Micrometer metrics + Prometheus/Grafana dashboard
-- [ ] Recurring (cron) jobs with single-leader scheduling
+- [x] Recurring (cron) jobs with single-leader scheduling
 - [ ] Web dashboard
 - [x] Load test & benchmark write-up (jobs/sec vs. worker count)
 - [ ] Retention: archive/purge finished jobs
