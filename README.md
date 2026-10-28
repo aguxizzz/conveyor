@@ -68,6 +68,22 @@ Then generate some load and watch it in Grafana at http://localhost:3000 (no log
 scripts/load.sh 30 120             # 30 jobs/s for 2 minutes; try 100 to see the backlog build up
 ```
 
+## Performance
+
+Measured with a reproducible benchmark against real Postgres (details, method and the bug it found in
+[BENCHMARK.md](BENCHMARK.md)):
+
+| | Result |
+|---|---:|
+| Queue overhead, 1 worker (no-op jobs) | ~3,300 jobs/s |
+| Peak, 2–4 workers on a 4-core laptop shared with Postgres | ~5,000 jobs/s |
+| Claim latency with 100,000 pending jobs | ~1 ms (was 42 ms before the fix) |
+| Throughput with 1M finished jobs in the table | unchanged |
+
+Profiling the first run showed the claim query sorting the entire backlog on every poll; splitting
+lease recovery out and matching the index to the `ORDER BY` made claims O(1) in backlog size and
+raised single-worker throughput 6×.
+
 ## Metrics
 
 Exposed at `/actuator/prometheus`. Two sources, on purpose:
@@ -123,11 +139,13 @@ after a simulated crash; fencing of a stale worker; heartbeats keeping long jobs
 retries, dead-lettering, delayed jobs and idempotent enqueue; recorded metrics per outcome
 (including a fenced-off attempt), and the full app exposing them through `/actuator/prometheus`.
 
+The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbenchmark=true`.
+
 ## Roadmap
 
 - [ ] `LISTEN/NOTIFY` wake-ups (sub-millisecond pickup without tight polling)
 - [x] Micrometer metrics + Prometheus/Grafana dashboard
 - [ ] Recurring (cron) jobs with single-leader scheduling
 - [ ] Web dashboard
-- [ ] Load test & benchmark write-up (jobs/sec vs. worker count)
+- [x] Load test & benchmark write-up (jobs/sec vs. worker count)
 - [ ] Retention: archive/purge finished jobs
