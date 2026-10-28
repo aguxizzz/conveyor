@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -31,6 +33,7 @@ import org.testcontainers.utility.DockerImageName;
 import dev.aguxis.conveyor.core.Job;
 import dev.aguxis.conveyor.core.JobHandler;
 import dev.aguxis.conveyor.core.JobHandlerRegistry;
+import dev.aguxis.conveyor.core.JobNotificationListener;
 import dev.aguxis.conveyor.core.JobRepository;
 import dev.aguxis.conveyor.core.NewJob;
 import dev.aguxis.conveyor.core.RetryPolicy;
@@ -217,6 +220,59 @@ class ThroughputBenchmark {
 			row(String.format("%,d", backlog), String.format("%.2f", ms));
 		}
 		ds.close();
+	}
+
+	/**
+	 * An idle queue receiving jobs one at a time: how long from the enqueue commit until the job is done?
+	 * With polling alone that's dominated by where in the poll interval the job lands.
+	 */
+	@Test
+	void pickupLatencyWhenIdle() {
+		int jobs = 200;
+		section("Latency on an idle queue: " + jobs + " no-op jobs enqueued one by one, enqueue → done",
+				"| Wake-up | Poll interval | p50 | p99 |", "|---|---:|---:|---:|");
+		latencyRow(false, Duration.ofMillis(500), jobs);
+		latencyRow(false, Duration.ofSeconds(2), jobs);
+		latencyRow(true, Duration.ofSeconds(2), jobs);
+	}
+
+	private static void latencyRow(boolean listen, Duration pollInterval, int jobs) {
+		jdbc.sql("TRUNCATE jobs RESTART IDENTITY").update();
+		HikariDataSource ds = dataSource(CONCURRENCY + 2);
+		var pool = new WorkerPool(transactional(ds), new JobHandlerRegistry(List.of(noop())),
+				new RetryPolicy(Duration.ofMillis(10), Duration.ofMillis(50)),
+				new WorkerPool.Settings("bench", "default", CONCURRENCY, pollInterval, Duration.ofSeconds(30),
+						Duration.ofSeconds(10), Duration.ofSeconds(20)),
+				new SimpleMeterRegistry());
+		var listener = new JobNotificationListener(
+				new DriverManagerDataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword()),
+				List.of(pool), new SimpleMeterRegistry());
+		pool.start();
+		if (listen) {
+			listener.start();
+			while (!listener.isConnected()) {
+				sleep(Duration.ofMillis(10));
+			}
+		}
+		var producer = new JobRepository(JdbcClient.create(admin));
+		for (int i = 0; i < jobs; i++) {
+			producer.enqueue(NewJob.of("bench", "{}"));
+			// Random gaps, so jobs land at every point of the poll cycle.
+			sleep(Duration.ofMillis(ThreadLocalRandom.current().nextLong(20, 120)));
+		}
+		while (jdbc.sql("SELECT count(*) FROM jobs WHERE status <> 'SUCCEEDED'").query(Long.class).single() > 0) {
+			sleep(Duration.ofMillis(10));
+		}
+		listener.stop();
+		pool.stop();
+		ds.close();
+		var ms = jdbc.sql("""
+				SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY latency) AS p50,
+				       percentile_cont(0.99) WITHIN GROUP (ORDER BY latency) AS p99
+				  FROM (SELECT extract(epoch FROM finished_at - created_at) * 1000 AS latency FROM jobs) l
+				""").query((rs, n) -> new double[] { rs.getDouble("p50"), rs.getDouble("p99") }).single();
+		row(listen ? "LISTEN/NOTIFY" : "polling only", pollInterval.toMillis() + " ms",
+				String.format("%.1f ms", ms[0]), String.format("%.1f ms", ms[1]));
 	}
 
 	/**

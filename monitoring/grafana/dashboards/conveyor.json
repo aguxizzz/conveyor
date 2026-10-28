@@ -460,7 +460,7 @@
           "mode": "multi"
         }
       },
-      "description": "From run_at (job became runnable) to claim. Lower bound is the poll interval."
+      "description": "From run_at (job became runnable) to claim. Milliseconds with LISTEN/NOTIFY; if the listener is down, up to the poll interval."
     },
     {
       "id": 9,
