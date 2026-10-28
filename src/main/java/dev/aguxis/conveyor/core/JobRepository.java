@@ -68,6 +68,16 @@ public class JobRepository {
 	 */
 	@Transactional
 	public List<Job> claim(String queue, String workerId, int limit, Duration lease) {
+		jdbc.sql("""
+				UPDATE jobs
+				   SET status = 'PENDING', locked_by = NULL, locked_until = NULL, updated_at = now()
+				 WHERE id IN (
+				       SELECT id FROM jobs
+				        WHERE queue = :queue AND status = 'RUNNING' AND locked_until < now()
+				        FOR UPDATE SKIP LOCKED)
+				""")
+				.param("queue", queue)
+				.update();
 		return jdbc.sql("""
 				UPDATE jobs
 				   SET status = 'RUNNING',
@@ -77,9 +87,7 @@ public class JobRepository {
 				       updated_at = now()
 				 WHERE id IN (
 				       SELECT id FROM jobs
-				        WHERE queue = :queue
-				          AND ((status = 'PENDING' AND run_at <= now())
-				            OR (status = 'RUNNING' AND locked_until < now()))
+				        WHERE queue = :queue AND status = 'PENDING' AND run_at <= now()
 				        ORDER BY priority DESC, run_at, id
 				        LIMIT :limit
 				        FOR UPDATE SKIP LOCKED)
