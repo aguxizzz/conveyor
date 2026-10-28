@@ -22,6 +22,7 @@ import dev.aguxis.conveyor.core.JobHandlerRegistry;
 import dev.aguxis.conveyor.core.JobNotificationListener;
 import dev.aguxis.conveyor.core.JobRepository;
 import dev.aguxis.conveyor.core.LeaderLease;
+import dev.aguxis.conveyor.core.RetentionSweeper;
 import dev.aguxis.conveyor.core.RetryPolicy;
 import dev.aguxis.conveyor.core.ScheduleRepository;
 import dev.aguxis.conveyor.core.WorkerPool;
@@ -83,6 +84,15 @@ class ConveyorConfiguration {
 		var scheduler = properties.scheduler();
 		return new CronScheduler(schedules, jobs, leases, new TransactionTemplate(transactionManager),
 				new CronScheduler.Settings(instance, scheduler.tick(), scheduler.lease()), meterRegistry);
+	}
+
+	@Bean
+	@ConditionalOnBooleanProperty(name = "conveyor.retention.enabled", matchIfMissing = true)
+	RetentionSweeper retentionSweeper(ConveyorProperties properties, JobRepository jobs, MeterRegistry meterRegistry) {
+		var retention = properties.retention();
+		return new RetentionSweeper(jobs,
+				new RetentionSweeper.Settings(retention.succeeded(), retention.dead(), retention.batchSize()),
+				meterRegistry);
 	}
 
 	@Bean

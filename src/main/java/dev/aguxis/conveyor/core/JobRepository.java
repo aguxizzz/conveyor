@@ -167,6 +167,31 @@ public class JobRepository {
 				.optional();
 	}
 
+	/**
+	 * Deletes up to {@code limit} jobs that ended in {@code status} more than {@code age} ago, oldest
+	 * first, and returns how many. Each call is its own short transaction, so a large purge never holds
+	 * many row locks or one long transaction.
+	 * <p>
+	 * Rows locked by someone else are skipped, not waited for: a revive in progress, or the sweep of
+	 * another instance, which then takes a different batch. A skipped row is deleted by a later sweep if
+	 * it's still due.
+	 */
+	public int deleteFinished(JobStatus status, Duration age, int limit) {
+		return jdbc.sql("""
+				DELETE FROM jobs
+				 WHERE id IN (
+				       SELECT id FROM jobs
+				        WHERE status = :status AND finished_at < now() - make_interval(secs => :ageSeconds)
+				        ORDER BY finished_at
+				        LIMIT :limit
+				        FOR UPDATE SKIP LOCKED)
+				""")
+				.param("status", status.name())
+				.param("ageSeconds", seconds(age))
+				.param("limit", limit)
+				.update();
+	}
+
 	public Optional<Job> findById(long id) {
 		return jdbc.sql("SELECT * FROM jobs WHERE id = :id").param("id", id).query(JOB_MAPPER).optional();
 	}
