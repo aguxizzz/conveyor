@@ -2,7 +2,7 @@
 
 How fast can a fleet of Conveyor workers drain one queue, and what limits it? The benchmark answered
 that, and also turned up a query-plan bug that capped throughput at ~540 jobs/s per worker. This page
-covers both.
+covers both, plus what `LISTEN/NOTIFY` wake-ups bought (latency) and what they cost (enqueue rate).
 
 ## Setup
 
@@ -67,6 +67,38 @@ A single claim of 8 jobs, average of 300. A queue should not get slower as it fa
 
 Finished jobs don't slow the queue down, because every hot index is partial (`WHERE status = 'PENDING'`
 / `'RUNNING'`). The idempotency key costs about 10%, from maintaining one more unique index.
+(Enqueue figures are from before `LISTEN/NOTIFY`; see below for its cost.)
+
+### Wake-ups: latency on an idle queue
+
+One worker, an idle queue, 200 no-op jobs enqueued one at a time with random 20–120 ms gaps, so jobs
+land at every point of the poll cycle. Measured from the enqueue commit (`created_at`) to `finished_at`.
+
+| Wake-up | Poll interval | p50 | p99 |
+|---|---:|---:|---:|
+| polling only | 500 ms | 263.6 ms | 504.2 ms |
+| polling only | 2000 ms | 1035.5 ms | 1992.2 ms |
+| `LISTEN/NOTIFY` | 2000 ms | **3.3 ms** | **6.2 ms** |
+
+With polling alone the latency is just where the job lands in the interval: half of it on average,
+all of it at worst. Notifications make it independent of the interval, which is why the default poll
+went from 500 ms to 2 s: 4× fewer idle claim queries per worker, and still lower latency.
+
+### What notifications cost
+
+`NOTIFY` isn't free on the write path. A transaction that sent a notification takes a database-wide
+lock while it commits, so those commits run one at a time. Alternating runs on the same database,
+16 clients, one job per transaction:
+
+| Enqueue | Jobs/s (4 runs) |
+|---|---:|
+| trigger disabled | 14,082 · 13,872 · 14,204 · 14,682 |
+| trigger enabled | 9,246 · 10,563 · 10,520 · 10,495 |
+
+About **27% fewer enqueues per second** under heavy concurrent load. It's accepted on purpose: ~10,000
+enqueues/s is still twice what the workers can drain on this machine (~5,000 jobs/s), so the system's
+bottleneck doesn't move, while pickup latency drops by two orders of magnitude. Bulk inserts barely
+notice it: identical notifications inside one transaction are collapsed into one.
 
 ## What the first run found
 
@@ -124,5 +156,6 @@ Limit (actual time=0.055..0.060 rows=4)
 
 - **Batch completions**: one `UPDATE ... WHERE id = ANY(...)` for several finished jobs would cut
   commits per job, which are now the dominant cost for short jobs.
-- **`LISTEN/NOTIFY`** to wake idle pollers, which matters for latency rather than throughput (already on
-  the roadmap).
+- **Cheaper wake-ups under heavy enqueue load**: skip the `NOTIFY` when workers are known to be busy
+  (they'll claim on their own anyway), or announce from a separate, batched transaction instead of the
+  enqueue's own commit.

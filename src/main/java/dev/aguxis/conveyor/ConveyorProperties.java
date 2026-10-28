@@ -13,7 +13,9 @@ public record ConveyorProperties(@DefaultValue Worker worker, @DefaultValue Retr
 			@DefaultValue("true") boolean enabled,
 			@DefaultValue("default") List<String> queues,
 			@DefaultValue("8") int concurrency,
-			@DefaultValue("500ms") Duration pollInterval,
+			// Fallback only while listen is on: it bounds the wait for delayed jobs, retries and missed notifications.
+			@DefaultValue("2s") Duration pollInterval,
+			@DefaultValue("true") boolean listen,
 			@DefaultValue("30s") Duration lease,
 			@DefaultValue("10s") Duration heartbeatInterval,
 			@DefaultValue("20s") Duration shutdownTimeout) {

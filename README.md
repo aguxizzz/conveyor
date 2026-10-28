@@ -20,6 +20,9 @@ Postgres is already in most stacks; Conveyor makes it your job queue.
   wakes up after losing its lease cannot overwrite the result of the attempt that replaced it.
 - **Retries with full-jitter exponential backoff** and a dead-letter state (`DEAD`) with manual revive.
 - **Idempotent enqueue** via `idempotencyKey`: clients can safely retry the enqueue request itself.
+- **Instant pickup with `LISTEN/NOTIFY`**: a trigger announces new jobs, so idle workers claim them in
+  ~3 ms instead of waiting for their next poll. Polling stays as the safety net, so a missed
+  notification only costs latency, never a job.
 - **Priorities, delayed jobs, multiple queues**, and bounded concurrency per worker.
 - **Observability**: Micrometer metrics scraped by Prometheus, with a provisioned Grafana dashboard
   (throughput, backlog, pickup latency, execution time, worker utilization).
@@ -79,10 +82,32 @@ Measured with a reproducible benchmark against real Postgres (details, method an
 | Peak, 2–4 workers on a 4-core laptop shared with Postgres | ~5,000 jobs/s |
 | Claim latency with 100,000 pending jobs | ~1 ms (was 42 ms before the fix) |
 | Throughput with 1M finished jobs in the table | unchanged |
+| Idle-queue latency, enqueue → done (p50) | ~3 ms with `LISTEN/NOTIFY` (264 ms polling every 500 ms) |
 
 Profiling the first run showed the claim query sorting the entire backlog on every poll; splitting
 lease recovery out and matching the index to the `ORDER BY` made claims O(1) in backlog size and
 raised single-worker throughput 6×.
+
+## Wake-ups with LISTEN/NOTIFY
+
+A trigger on `jobs` runs `pg_notify('conveyor_jobs', queue)` whenever a row becomes runnable now
+(inserted, or revived from `DEAD`). Each instance keeps one dedicated connection `LISTEN`ing on that
+channel, outside the connection pool, and wakes the pool for the named queue.
+
+- **Delivered on commit only**, so a woken worker can always see the job; a rolled-back enqueue wakes
+  nobody.
+- **Polling remains the source of truth.** Delayed jobs and retries (`run_at` in the future) aren't
+  announced, and a notification sent while the listener is reconnecting is simply lost. The regular
+  poll (now every 2 s by default) picks up both, so notifications only ever make things faster.
+- **Lost connections are detected and healed**: the listener runs a `SELECT 1` after 30 s of silence
+  (idle connections can die without a TCP reset), reconnects on any error, and then wakes every pool,
+  since anything announced while it was gone went to nobody. `conveyor_listener_connected` shows when
+  it's down.
+- **Every instance wakes, one wins.** All idle workers race for the new job; `SKIP LOCKED` hands it to
+  one and the rest get an empty claim, which is cheap.
+- **The cost is on enqueue**: notifying commits are serialized by Postgres, which cut peak enqueue rate
+  by ~27% in the benchmark (still twice the drain rate). `conveyor.worker.listen=false` turns the
+  listener off.
 
 ## Metrics
 
@@ -93,6 +118,7 @@ Exposed at `/actuator/prometheus`. Two sources, on purpose:
 | `conveyor_job_execution_seconds` (histogram; `queue`, `type`, `outcome`) | each worker | Throughput, failure rate and p95 per job type. `outcome` is `succeeded`, `retried`, `dead` or `lost` (finished after its lease was taken over). |
 | `conveyor_job_pickup_latency_seconds` (histogram; `queue`) | each worker | How long a runnable job waits before a worker claims it. |
 | `conveyor_worker_in_flight`, `conveyor_worker_concurrency` | each worker | Utilization: are workers saturated? |
+| `conveyor_listener_connected` | each worker | 0 means wake-ups are down and pickup falls back to the poll interval. |
 | `conveyor_queue_jobs` (`queue`, `status`) | Postgres | Backlog by status. |
 | `conveyor_queue_oldest_ready_age_seconds` (`queue`) | Postgres | The alerting signal: grows without bound when workers can't keep up. |
 
@@ -138,12 +164,15 @@ They cover: 4 competing workers × 300 jobs, each run exactly once; lease expiry
 after a simulated crash; fencing of a stale worker; heartbeats keeping long jobs leased;
 retries, dead-lettering, delayed jobs and idempotent enqueue; recorded metrics per outcome
 (including a fenced-off attempt), and the full app exposing them through `/actuator/prometheus`.
+Wake-up tests poll only once a minute, so a job finishing within seconds proves the notification
+path: new and revived jobs, queue filtering, and reconnecting after the listener's session is killed
+with `pg_terminate_backend`.
 
 The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbenchmark=true`.
 
 ## Roadmap
 
-- [ ] `LISTEN/NOTIFY` wake-ups (sub-millisecond pickup without tight polling)
+- [x] `LISTEN/NOTIFY` wake-ups (~3 ms pickup without tight polling)
 - [x] Micrometer metrics + Prometheus/Grafana dashboard
 - [ ] Recurring (cron) jobs with single-leader scheduling
 - [ ] Web dashboard
