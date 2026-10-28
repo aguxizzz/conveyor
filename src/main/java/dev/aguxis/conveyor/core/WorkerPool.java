@@ -24,6 +24,9 @@ import dev.aguxis.conveyor.core.WorkerMetrics.Outcome;
  * Only as many jobs are claimed as there are free threads, so a worker never holds leases on work it
  * isn't actually executing. While a job runs, its lease is periodically extended (heartbeat); if
  * this process dies, the lease expires and another worker picks the job up.
+ * <p>
+ * When the queue is drained the poller sleeps for {@code pollInterval}, unless {@link #wakeUp()} is
+ * called first (by {@link JobNotificationListener} when a job is enqueued).
  */
 public class WorkerPool implements SmartLifecycle {
 
@@ -47,6 +50,8 @@ public class WorkerPool implements SmartLifecycle {
 	private final WorkerMetrics metrics;
 	private final Map<Long, Job> inFlight = new ConcurrentHashMap<>();
 	private final Object capacityChanged = new Object();
+	private final Object wakeUp = new Object();
+	private boolean wakeUpRequested; // guarded by wakeUp
 
 	private volatile boolean running;
 	private Thread poller;
@@ -111,6 +116,21 @@ public class WorkerPool implements SmartLifecycle {
 		return inFlight.size();
 	}
 
+	public String queue() {
+		return settings.queue();
+	}
+
+	/**
+	 * Ends the current idle wait so the poller claims right away. Safe to call at any time: a wake-up
+	 * that arrives while the poller is busy claiming isn't lost, it skips the next wait instead.
+	 */
+	public void wakeUp() {
+		synchronized (wakeUp) {
+			wakeUpRequested = true;
+			wakeUp.notifyAll();
+		}
+	}
+
 	private void pollLoop() {
 		while (running) {
 			try {
@@ -127,7 +147,7 @@ public class WorkerPool implements SmartLifecycle {
 				}
 				if (claimed.size() < free) {
 					// Queue drained; back off. A full batch means there's probably more, so poll again now.
-					Thread.sleep(settings.pollInterval().toMillis());
+					awaitWakeUp();
 				}
 			}
 			catch (InterruptedException e) {
@@ -211,6 +231,15 @@ public class WorkerPool implements SmartLifecycle {
 			if (inFlight.size() >= settings.concurrency()) {
 				capacityChanged.wait(settings.pollInterval().toMillis());
 			}
+		}
+	}
+
+	private void awaitWakeUp() throws InterruptedException {
+		synchronized (wakeUp) {
+			if (!wakeUpRequested) {
+				wakeUp.wait(settings.pollInterval().toMillis());
+			}
+			wakeUpRequested = false;
 		}
 	}
 
