@@ -25,6 +25,8 @@ Postgres is already in most stacks; Conveyor makes it your job queue.
   notification only costs latency, never a job.
 - **Recurring jobs (cron)** with time zones, fired by a single elected leader. Leadership is a lease
   with a fencing term, so a paused ex-leader can't fire, and a crashed leader is replaced within ~20 s.
+- **Retention**: finished jobs are deleted after 7 days (`DEAD` after 30), in small batches that never
+  block workers, so the table doesn't grow forever.
 - **Priorities, delayed jobs, multiple queues**, and bounded concurrency per worker.
 - **Observability**: Micrometer metrics scraped by Prometheus, with a provisioned Grafana dashboard
   (throughput, backlog, pickup latency, execution time, worker utilization).
@@ -144,6 +146,31 @@ Every instance runs a scheduler, but only the **leader** fires:
 `conveyor_scheduler_leader` is 1 on the leader, and `conveyor_scheduler_fired_total` counts jobs it
 enqueued. `conveyor.scheduler.enabled=false` keeps an instance out of the election.
 
+## Retention
+
+Every instance deletes finished jobs past their retention every 5 minutes, oldest first, 1,000 rows
+per transaction:
+
+```properties
+# Also how long an idempotencyKey is remembered.
+conveyor.retention.succeeded=7d
+# Kept longer: these are the jobs someone may want to inspect or revive.
+conveyor.retention.dead=30d
+# Keep everything, or purge some other way.
+conveyor.retention.enabled=false
+```
+
+- **Small batches**, each in its own transaction, instead of one big `DELETE`: a purge of millions of
+  rows never holds millions of row locks or one long transaction, and autovacuum can reuse the freed
+  space as it goes.
+- **No leader needed.** Rows are picked `FOR UPDATE SKIP LOCKED`, so sweeps on several instances split
+  the work between them, and a row someone else holds (a revive in progress) is skipped rather than
+  waited for. Deleting is idempotent, so unlike firing schedules there's nothing to fence.
+- **Indexed**: a partial index on `(status, finished_at)` turns each batch into an index range scan.
+  It's built `CONCURRENTLY`, so upgrading a database that's already large doesn't block enqueues.
+- Deleting a job frees its idempotency key: a client retrying an enqueue older than
+  `conveyor.retention.succeeded` gets a new job.
+
 ## Metrics
 
 Exposed at `/actuator/prometheus`. Two sources, on purpose:
@@ -155,6 +182,7 @@ Exposed at `/actuator/prometheus`. Two sources, on purpose:
 | `conveyor_worker_in_flight`, `conveyor_worker_concurrency` | each worker | Utilization: are workers saturated? |
 | `conveyor_listener_connected` | each worker | 0 means wake-ups are down and pickup falls back to the poll interval. |
 | `conveyor_scheduler_leader`, `conveyor_scheduler_fired_total` | each instance | Which instance fires schedules (exactly one should be 1), and how many jobs it enqueued. |
+| `conveyor_retention_deleted_total` (`status`) | each instance | Finished jobs purged by retention. |
 | `conveyor_queue_jobs` (`queue`, `status`) | Postgres | Backlog by status. |
 | `conveyor_queue_oldest_ready_age_seconds` (`queue`) | Postgres | The alerting signal: grows without bound when workers can't keep up. |
 
@@ -211,6 +239,10 @@ Scheduler tests run three competing schedulers (one leads, every occurrence beco
 hand-off on shutdown, takeover from a crashed leader's expired lease, a stale leader fenced off by
 its term, a takeover blocking until the old leader's firing commits, and an hour of missed firings
 coalesced into one.
+Retention tests check that only jobs past their status's retention are deleted (never pending, running
+or revived ones), that a backlog bigger than one batch goes in one sweep, that a locked row is skipped
+without blocking, that two concurrent sweeps delete 5,000 jobs between them with no overlap, and that
+the query plan uses the index.
 
 The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbenchmark=true`.
 
@@ -221,4 +253,4 @@ The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbe
 - [x] Recurring (cron) jobs with single-leader scheduling
 - [ ] Web dashboard
 - [x] Load test & benchmark write-up (jobs/sec vs. worker count)
-- [ ] Retention: archive/purge finished jobs
+- [x] Retention: purge finished jobs in batches
