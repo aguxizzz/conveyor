@@ -13,18 +13,26 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import dev.aguxis.conveyor.core.CronScheduler;
 import dev.aguxis.conveyor.core.JobHandler;
 import dev.aguxis.conveyor.core.JobHandlerRegistry;
 import dev.aguxis.conveyor.core.JobNotificationListener;
 import dev.aguxis.conveyor.core.JobRepository;
+import dev.aguxis.conveyor.core.LeaderLease;
 import dev.aguxis.conveyor.core.RetryPolicy;
+import dev.aguxis.conveyor.core.ScheduleRepository;
 import dev.aguxis.conveyor.core.WorkerPool;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(ConveyorProperties.class)
 @EnableScheduling
 class ConveyorConfiguration {
+
+	/** Identifies this process in worker ids and as scheduler leader. Unique per start, not per host. */
+	private final String instance = hostname() + "-" + UUID.randomUUID().toString().substring(0, 8);
 
 	@Bean
 	JobHandlerRegistry jobHandlerRegistry(List<JobHandler> handlers) {
@@ -44,7 +52,6 @@ class ConveyorConfiguration {
 		if (!worker.enabled()) {
 			return new WorkerPools(List.of());
 		}
-		String instance = hostname() + "-" + UUID.randomUUID().toString().substring(0, 8);
 		List<WorkerPool> pools = worker.queues().stream()
 				.map(queue -> new WorkerPool(jobs, handlers, retryPolicy, new WorkerPool.Settings(
 						instance + "/" + queue, queue, worker.concurrency(), worker.pollInterval(),
@@ -67,6 +74,15 @@ class ConveyorConfiguration {
 		connectionProperties.setProperty("ApplicationName", "conveyor-listener");
 		dataSource.setConnectionProperties(connectionProperties);
 		return new JobNotificationListener(dataSource, workerPools.pools(), meterRegistry);
+	}
+
+	@Bean
+	@ConditionalOnBooleanProperty(name = "conveyor.scheduler.enabled", matchIfMissing = true)
+	CronScheduler cronScheduler(ConveyorProperties properties, ScheduleRepository schedules, JobRepository jobs,
+			LeaderLease leases, PlatformTransactionManager transactionManager, MeterRegistry meterRegistry) {
+		var scheduler = properties.scheduler();
+		return new CronScheduler(schedules, jobs, leases, new TransactionTemplate(transactionManager),
+				new CronScheduler.Settings(instance, scheduler.tick(), scheduler.lease()), meterRegistry);
 	}
 
 	@Bean
