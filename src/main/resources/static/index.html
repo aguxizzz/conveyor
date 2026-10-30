@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conveyor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='5' width='4' height='6' rx='1' fill='%232f5bd3'/%3E%3Crect x='6' y='5' width='4' height='6' rx='1' fill='%232f5bd3'/%3E%3Crect x='11' y='5' width='4' height='6' rx='1' fill='%232f5bd3'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="dashboard.css">
+<script src="dashboard.js" defer></script>
+</head>
+<body>
+<header class="top">
+	<h1>Conveyor</h1>
+	<span id="leader" class="pill">scheduler</span>
+	<span class="spacer"></span>
+	<span id="live" class="live" data-state="loading"><span class="dot"></span><span id="live-text">Loading</span></span>
+	<button id="toggle-refresh" type="button">Pause</button>
+</header>
+
+<main>
+	<section>
+		<h2>Queues</h2>
+		<div id="queues" class="queues"></div>
+	</section>
+
+	<section>
+		<div class="section-head">
+			<h2>Jobs</h2>
+			<form id="filters" class="filters">
+				<select name="status" aria-label="Status">
+					<option value="">All statuses</option>
+					<option>PENDING</option>
+					<option>RUNNING</option>
+					<option>SUCCEEDED</option>
+					<option>DEAD</option>
+				</select>
+				<select name="queue" aria-label="Queue">
+					<option value="">All queues</option>
+				</select>
+				<select name="limit" aria-label="Rows">
+					<option value="50">50 rows</option>
+					<option value="100">100 rows</option>
+					<option value="500">500 rows</option>
+				</select>
+			</form>
+			<span class="spacer"></span>
+			<button id="open-enqueue" type="button" class="primary">Enqueue job</button>
+		</div>
+		<div class="table-wrap">
+			<table class="data">
+				<thead>
+					<tr><th>ID</th><th>Status</th><th>Type</th><th>Queue</th><th class="num">Attempts</th>
+						<th>Run at</th><th>Created</th><th>Worker</th><th>Last error</th><th></th></tr>
+				</thead>
+				<tbody id="jobs"></tbody>
+			</table>
+		</div>
+		<p id="jobs-empty" class="empty" hidden>No jobs match these filters.</p>
+	</section>
+
+	<section>
+		<h2>Schedules</h2>
+		<div class="table-wrap">
+			<table class="data">
+				<thead>
+					<tr><th>Name</th><th>Cron</th><th>Enqueues</th><th>Next run</th><th>Last run</th><th></th></tr>
+				</thead>
+				<tbody id="schedules"></tbody>
+			</table>
+		</div>
+		<p id="schedules-empty" class="empty" hidden>No schedules. Create one with <code>PUT /api/schedules/{name}</code>.</p>
+	</section>
+</main>
+
+<dialog id="job-dialog">
+	<div class="dialog-head">
+		<h3 id="job-title">Job</h3>
+		<button type="button" class="ghost" data-close aria-label="Close">✕</button>
+	</div>
+	<div id="job-body"></div>
+</dialog>
+
+<dialog id="enqueue-dialog">
+	<form id="enqueue-form" method="dialog">
+		<div class="dialog-head">
+			<h3>Enqueue job</h3>
+			<button type="button" class="ghost" data-close aria-label="Close">✕</button>
+		</div>
+		<div class="fields">
+			<label class="wide">Type <input name="type" required maxlength="200" placeholder="demo.sleep" list="known-types"></label>
+			<datalist id="known-types">
+				<option value="demo.sleep">
+				<option value="demo.flaky">
+			</datalist>
+			<label class="wide">Payload (JSON) <textarea name="payload" rows="4" spellcheck="false">{}</textarea></label>
+			<label>Queue <input name="queue" maxlength="100" placeholder="default"></label>
+			<label>Priority <input name="priority" type="number" step="1" placeholder="0"></label>
+			<label>Max attempts <input name="maxAttempts" type="number" min="1" max="100" placeholder="5"></label>
+			<label>Delay (s) <input name="delaySeconds" type="number" min="0" placeholder="0"></label>
+			<label class="wide">Idempotency key <input name="idempotencyKey" maxlength="200" placeholder="optional"></label>
+		</div>
+		<p id="enqueue-error" class="error" hidden></p>
+		<div class="dialog-actions">
+			<button type="button" data-close>Cancel</button>
+			<button type="submit" class="primary">Enqueue</button>
+		</div>
+	</form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
