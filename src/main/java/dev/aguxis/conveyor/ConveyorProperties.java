@@ -8,7 +8,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 
 @ConfigurationProperties("conveyor")
 public record ConveyorProperties(@DefaultValue Worker worker, @DefaultValue Retry retry,
-		@DefaultValue Scheduler scheduler) {
+		@DefaultValue Scheduler scheduler, @DefaultValue Retention retention) {
 
 	public record Worker(
 			@DefaultValue("true") boolean enabled,
@@ -33,5 +33,15 @@ public record ConveyorProperties(@DefaultValue Worker worker, @DefaultValue Retr
 			@DefaultValue("1s") Duration tick,
 			// A crashed leader is replaced within about 4/3 of this.
 			@DefaultValue("15s") Duration lease) {
+	}
+
+	public record Retention(
+			@DefaultValue("true") boolean enabled,
+			// How long finished jobs are kept, by how they ended. Also the idempotency window of enqueue.
+			@DefaultValue("7d") Duration succeeded,
+			@DefaultValue("30d") Duration dead,
+			// Read by RetentionSweeper's @Scheduled directly; declared here so it's documented and validated.
+			@DefaultValue("5m") Duration interval,
+			@DefaultValue("1000") int batchSize) {
 	}
 }
