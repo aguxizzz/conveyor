@@ -139,11 +139,18 @@ function renderQueues(stats) {
 	$('queues').replaceChildren(...stats.map((q) => {
 		const counts = { PENDING: q.pending, RUNNING: q.running, SUCCEEDED: q.succeeded, DEAD: q.dead };
 		const waiting = q.oldestReadySeconds;
+		const total = STATUSES.reduce((sum, status) => sum + counts[status], 0);
 		return h('article', { class: 'queue' },
 			h('div', { class: 'queue-head' },
 				h('span', { class: 'queue-name' }, q.queue),
 				h('span', { class: `queue-age${waiting > BACKLOG_WARN_SECONDS ? ' warn' : ''}` },
 					waiting > 0 ? `oldest ready job waiting ${duration(waiting)}` : 'nothing waiting')),
+			h('div', {
+				class: 'queue-bar',
+				role: 'img',
+				'aria-label': STATUSES.map((status) => `${counts[status]} ${status.toLowerCase()}`).join(', '),
+			}, STATUSES.filter((status) => counts[status] > 0).map((status) =>
+				h('span', { 'data-status': status, style: `flex-grow: ${counts[status] / total}` }))),
 			h('div', { class: 'counts' }, STATUSES.map((status) =>
 				h('button', {
 					type: 'button',

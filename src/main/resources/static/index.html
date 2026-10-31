@@ -10,7 +10,7 @@
 </head>
 <body>
 <header class="top">
-	<h1>Conveyor</h1>
+	<div class="brand"><svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" rx="1"/><rect x="6" y="5" width="4" height="6" rx="1"/><rect x="11" y="5" width="4" height="6" rx="1"/></svg><h1>Conveyor</h1></div>
 	<span id="leader" class="pill">scheduler</span>
 	<span class="spacer"></span>
 	<span id="live" class="live" data-state="loading"><span class="dot"></span><span id="live-text">Loading</span></span>
@@ -46,7 +46,7 @@
 			<span class="spacer"></span>
 			<button id="open-enqueue" type="button" class="primary">Enqueue job</button>
 		</div>
-		<div class="table-wrap">
+		<div class="table-wrap jobs-wrap">
 			<table class="data">
 				<thead>
 					<tr><th>ID</th><th>Status</th><th>Type</th><th>Queue</th><th class="num">Attempts</th>
@@ -75,7 +75,7 @@
 <dialog id="job-dialog">
 	<div class="dialog-head">
 		<h3 id="job-title">Job</h3>
-		<button type="button" class="ghost" data-close aria-label="Close">✕</button>
+		<button type="button" class="ghost" data-close aria-label="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9m0-9l-9 9"/></svg></button>
 	</div>
 	<div id="job-body"></div>
 </dialog>
@@ -84,7 +84,7 @@
 	<form id="enqueue-form" method="dialog">
 		<div class="dialog-head">
 			<h3>Enqueue job</h3>
-			<button type="button" class="ghost" data-close aria-label="Close">✕</button>
+			<button type="button" class="ghost" data-close aria-label="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9m0-9l-9 9"/></svg></button>
 		</div>
 		<div class="fields">
 			<label class="wide">Type <input name="type" required maxlength="200" placeholder="demo.sleep" list="known-types"></label>
