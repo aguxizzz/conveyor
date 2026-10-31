@@ -15,6 +15,7 @@
 	--succeeded-bg: #daf2e3;
 	--dead: #b42626;
 	--dead-bg: #fbe2e2;
+	--ease: cubic-bezier(0.16, 1, 0.3, 1);
 	--mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 	color-scheme: light;
 }
@@ -42,6 +43,8 @@
 }
 
 * { box-sizing: border-box; }
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+::placeholder { color: var(--muted); opacity: 1; }
 [hidden] { display: none !important; }
 
 body {
@@ -50,11 +53,12 @@ body {
 	color: var(--text);
 	font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 	font-variant-numeric: tabular-nums;
+	scrollbar-color: var(--border) transparent;
 }
 
 h1, h2, h3 { margin: 0; font-weight: 600; }
 h1 { font-size: 17px; letter-spacing: -0.01em; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+h2 { font-size: 15px; letter-spacing: -0.005em; }
 h3 { font-size: 16px; }
 code { font-family: var(--mono); font-size: 0.92em; }
 
@@ -67,7 +71,8 @@ code { font-family: var(--mono); font-size: 0.92em; }
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 12px;
-	padding: 12px max(16px, calc((100vw - 1240px) / 2));
+	/* 1208px is main's content width, so the header lines up with the sections below it. */
+	padding: 12px max(16px, calc((100% - 1208px) / 2));
 	background: var(--surface);
 	border-bottom: 1px solid var(--border);
 	position: sticky;
@@ -82,8 +87,11 @@ main {
 	display: grid;
 	/* minmax(0, …) lets wide tables scroll inside their wrapper instead of widening the page. */
 	grid-template-columns: minmax(0, 1fr);
-	gap: 28px;
+	gap: 32px;
 }
+
+.brand { display: flex; align-items: center; gap: 8px; }
+.mark { width: 20px; height: 20px; fill: var(--accent); }
 
 section > h2, .section-head { margin-bottom: 10px; }
 
@@ -101,14 +109,30 @@ section > h2, .section-head { margin-bottom: 10px; }
 	background: var(--surface-2);
 	color: var(--muted);
 	white-space: nowrap;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 .pill.warn { background: var(--dead-bg); color: var(--dead); }
 
 .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.live .dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .live[data-state="live"] .dot { background: var(--succeeded); }
+/* The one moving thing on the page: a ring on the status dot, only while the data is actually updating. */
+.live[data-state="live"] .dot::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	background: var(--succeeded);
+	animation: ping 2s var(--ease) infinite;
+}
 .live[data-state="error"] { color: var(--dead); }
 .live[data-state="error"] .dot { background: var(--dead); }
+@keyframes ping {
+	from { transform: scale(1); opacity: 0.5; }
+	to { transform: scale(2.8); opacity: 0; }
+}
 
 button, select, input, textarea {
 	font: inherit;
@@ -121,11 +145,25 @@ button, select {
 	border-radius: 6px;
 	padding: 5px 11px;
 	cursor: pointer;
+	transition: background-color 120ms, border-color 120ms, color 120ms;
+}
+select {
+	appearance: none;
+	padding-right: 28px;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237d8590' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 10px center;
+	background-size: 10px 6px;
 }
 button:hover, select:hover { border-color: var(--muted); }
+button:active { background-color: var(--surface-2); }
 button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-button.ghost { border-color: transparent; background: none; color: var(--muted); }
+button.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+button.primary:active { background: color-mix(in srgb, var(--accent) 78%, var(--text)); }
+button.ghost { display: inline-flex; padding: 6px; border-color: transparent; background: none; color: var(--muted); }
+button.ghost:hover { background: var(--surface-2); color: var(--text); }
+button.ghost svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 button.small { padding: 2px 8px; font-size: 12px; }
 button.danger { color: var(--dead); }
 button.danger.armed { background: var(--dead); border-color: var(--dead); color: var(--surface); }
@@ -137,6 +175,7 @@ button.link {
 	font-family: var(--mono);
 	font-size: 13px;
 }
+button.link:hover { text-decoration: underline; text-underline-offset: 2px; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -157,29 +196,39 @@ button.link {
 	padding: 12px 14px;
 }
 
-.queue-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.queue-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
 .queue-name { font-family: var(--mono); font-weight: 600; }
 .queue-age { font-size: 12px; color: var(--muted); }
 .queue-age.warn { color: var(--dead); font-weight: 600; }
 
-.counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+[data-status="PENDING"] { --status: var(--pending); }
+[data-status="RUNNING"] { --status: var(--running); }
+[data-status="SUCCEEDED"] { --status: var(--succeeded); }
+[data-status="DEAD"] { --status: var(--dead); }
+
+/* Each segment's width is its share of the queue's jobs. */
+.queue-bar { display: flex; gap: 2px; height: 6px; margin-bottom: 8px; }
+.queue-bar span { min-width: 3px; border-radius: 2px; background: var(--status); }
+
+/* Negative margin: the numbers align with the queue name, the padding is only the hover area. */
+.counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin: 0 -8px; }
 
 .count {
 	display: flex;
 	flex-direction: column;
 	align-items: flex-start;
-	padding: 6px 8px;
+	padding: 4px 8px;
 	border: 0;
 	border-radius: 6px;
-	background: var(--surface-2);
+	background: none;
 	text-align: left;
 }
+.count:hover { background: var(--surface-2); }
 .count strong { font-size: 18px; font-weight: 600; line-height: 1.2; }
-.count span { font-size: 11px; color: var(--muted); text-transform: lowercase; }
-.count[data-status="RUNNING"] strong { color: var(--running); }
-.count[data-status="SUCCEEDED"] strong { color: var(--succeeded); }
-.count[data-status="DEAD"] strong { color: var(--dead); }
+.count span { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); text-transform: lowercase; }
+.count span::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--status); }
 .count.zero strong { color: var(--muted); }
+.count.zero span::before { background: var(--border); }
 
 /* Tables */
 
@@ -191,7 +240,7 @@ button.link {
 }
 
 table.data { width: 100%; border-collapse: collapse; }
-.data th, .data td { padding: 7px 12px; text-align: left; white-space: nowrap; }
+.data th, .data td { padding: 7px 12px; text-align: left; white-space: nowrap; vertical-align: baseline; }
 .data th {
 	font-size: 12px;
 	font-weight: 500;
@@ -226,7 +275,8 @@ table.data { width: 100%; border-collapse: collapse; }
 	background: var(--pending-bg);
 }
 .badge.RUNNING { color: var(--running); background: var(--running-bg); }
-.badge.SUCCEEDED { color: var(--succeeded); background: var(--succeeded-bg); }
+/* The normal outcome stays quiet, so a long list reads by what needs attention. */
+.badge.SUCCEEDED { color: var(--succeeded); background: none; }
 .badge.DEAD { color: var(--dead); background: var(--dead-bg); }
 .badge.off { color: var(--muted); background: var(--surface-2); }
 
@@ -297,6 +347,28 @@ pre.error-text { color: var(--dead); }
 	box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
 }
 .toast.bad { background: var(--dead); color: #fff; }
+
+/* Keeps Schedules reachable without scrolling past every job. */
+@media (min-width: 900px) {
+	.jobs-wrap { max-height: min(560px, 62vh); overflow-y: auto; }
+	.jobs-wrap th {
+		position: sticky;
+		top: 0;
+		background: var(--surface);
+		border-bottom: 0;
+		box-shadow: inset 0 -1px var(--border);
+	}
+}
+
+@media (max-width: 640px) {
+	.top { position: static; }
+	#leader { order: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	* { transition: none !important; }
+	.live[data-state="live"] .dot::after { animation: none; opacity: 0; }
+}
 
 @media (max-width: 520px) {
 	.fields { grid-template-columns: 1fr; }
