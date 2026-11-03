@@ -18,6 +18,9 @@ let paused = false;
 let timer = null;
 let generation = 0;
 let openJobId = null;
+// Schedule name → time its delete confirmation expires. Kept here because the table is rebuilt on every refresh.
+const armedDeletes = new Map();
+let lastSchedules = [];
 
 class ApiError extends Error {
 	constructor(status, body) {
@@ -77,6 +80,13 @@ function badge(status) {
 	return h('span', { class: `badge ${status}` }, status);
 }
 
+// Tables are rebuilt on every refresh; put keyboard focus back on the same control afterwards.
+function keepingFocus(render) {
+	const key = document.activeElement?.dataset?.key;
+	render();
+	if (key) document.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus();
+}
+
 function firstLine(text) {
 	return text ? text.split('\n', 1)[0] : '';
 }
@@ -129,16 +139,24 @@ function renderQueues(stats) {
 	$('queues').replaceChildren(...stats.map((q) => {
 		const counts = { PENDING: q.pending, RUNNING: q.running, SUCCEEDED: q.succeeded, DEAD: q.dead };
 		const waiting = q.oldestReadySeconds;
+		const total = STATUSES.reduce((sum, status) => sum + counts[status], 0);
 		return h('article', { class: 'queue' },
 			h('div', { class: 'queue-head' },
 				h('span', { class: 'queue-name' }, q.queue),
 				h('span', { class: `queue-age${waiting > BACKLOG_WARN_SECONDS ? ' warn' : ''}` },
 					waiting > 0 ? `oldest ready job waiting ${duration(waiting)}` : 'nothing waiting')),
+			h('div', {
+				class: 'queue-bar',
+				role: 'img',
+				'aria-label': STATUSES.map((status) => `${counts[status]} ${status.toLowerCase()}`).join(', '),
+			}, STATUSES.filter((status) => counts[status] > 0).map((status) =>
+				h('span', { 'data-status': status, style: `flex-grow: ${counts[status] / total}` }))),
 			h('div', { class: 'counts' }, STATUSES.map((status) =>
 				h('button', {
 					type: 'button',
 					class: `count${counts[status] === 0 ? ' zero' : ''}`,
 					'data-status': status,
+					'data-key': `count-${q.queue}-${status}`,
 					title: `Show ${status} jobs in ${q.queue}`,
 					onclick: () => applyFilters({ status, queue: q.queue }),
 				}, h('strong', null, counts[status].toLocaleString()), h('span', null, status)))));
@@ -160,6 +178,7 @@ function retryButton(job) {
 	return h('button', {
 		type: 'button',
 		class: 'small',
+		'data-key': `retry-${job.id}`,
 		onclick: async (event) => {
 			event.stopPropagation();
 			event.currentTarget.disabled = true;
@@ -178,7 +197,7 @@ function retryButton(job) {
 function renderJobs(jobs) {
 	$('jobs').replaceChildren(...jobs.map((job) =>
 		h('tr', { class: 'clickable', onclick: () => openJob(job.id) },
-			h('td', null, h('button', { type: 'button', class: 'link' }, `#${job.id}`)),
+			h('td', null, h('button', { type: 'button', class: 'link', 'data-key': `job-${job.id}` }, `#${job.id}`)),
 			h('td', null, badge(job.status)),
 			h('td', { class: 'mono' }, job.type),
 			h('td', { class: 'mono' }, job.queue),
@@ -193,22 +212,21 @@ function renderJobs(jobs) {
 
 function deleteButton(schedule) {
 	// Two clicks instead of confirm(): the first arms the button for a few seconds.
-	let armedUntil = 0;
+	const name = schedule.name;
+	const armed = Date.now() < (armedDeletes.get(name) ?? 0);
 	return h('button', {
 		type: 'button',
-		class: 'small danger',
+		class: `small danger${armed ? ' armed' : ''}`,
+		'data-key': `delete-${name}`,
 		onclick: async (event) => {
 			const button = event.currentTarget;
-			if (Date.now() > armedUntil) {
-				armedUntil = Date.now() + 3000;
-				button.classList.add('armed');
-				button.textContent = 'Confirm';
-				setTimeout(() => {
-					button.classList.remove('armed');
-					button.textContent = 'Delete';
-				}, 3000);
+			if (Date.now() >= (armedDeletes.get(name) ?? 0)) {
+				armedDeletes.set(name, Date.now() + 3000);
+				renderSchedules(lastSchedules);
+				setTimeout(() => renderSchedules(lastSchedules), 3000);
 				return;
 			}
+			armedDeletes.delete(name);
 			button.disabled = true;
 			try {
 				await api(`/api/schedules/${encodeURIComponent(schedule.name)}`, { method: 'DELETE' });
@@ -219,18 +237,19 @@ function deleteButton(schedule) {
 			}
 			refresh();
 		},
-	}, 'Delete');
+	}, armed ? 'Confirm' : 'Delete');
 }
 
 function renderSchedules(schedules) {
-	$('schedules').replaceChildren(...schedules.map((s) =>
+	lastSchedules = schedules;
+	keepingFocus(() => $('schedules').replaceChildren(...schedules.map((s) =>
 		h('tr', null,
 			h('td', { class: 'mono' }, s.name, s.enabled ? null : [' ', h('span', { class: 'badge off' }, 'DISABLED')]),
 			h('td', null, h('code', null, s.cron), h('span', { class: 'muted' }, ` ${s.timeZone}`)),
 			h('td', { class: 'mono' }, s.type, h('span', { class: 'muted' }, ` → ${s.queue}`)),
 			h('td', null, s.enabled ? time(s.nextRunAt) : '—'),
 			h('td', null, time(s.lastRunAt)),
-			h('td', { class: 'actions' }, deleteButton(s)))));
+			h('td', { class: 'actions' }, deleteButton(s))))));
 	$('schedules-empty').hidden = schedules.length > 0;
 }
 
@@ -351,8 +370,10 @@ async function refresh() {
 			api('/api/scheduler/leader').catch((e) => (e.status === 404 ? null : Promise.reject(e))),
 		]);
 		if (run !== generation) return;
-		renderQueues(stats);
-		renderJobs(jobs);
+		keepingFocus(() => {
+			renderQueues(stats);
+			renderJobs(jobs);
+		});
 		renderSchedules(schedules);
 		renderLeader(leader);
 		if (openJobId !== null) {
