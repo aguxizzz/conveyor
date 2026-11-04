@@ -25,6 +25,7 @@ public class RetentionSweeper {
 
 	private static final Logger log = LoggerFactory.getLogger(RetentionSweeper.class);
 
+	/** Retention per final status, and how many rows each delete statement takes at most. */
 	public record Settings(Duration succeeded, Duration dead, int batchSize) {
 	}
 

@@ -32,8 +32,10 @@ public class CronScheduler implements SmartLifecycle {
 	public static final String LEASE_NAME = "scheduler";
 
 	private static final Logger log = LoggerFactory.getLogger(CronScheduler.class);
+	// schedules fired per transaction; if more are due, the next tick picks up the rest
 	private static final int BATCH_SIZE = 100;
 
+	/** {@code tick} is how often the loop wakes up; {@code lease} is how long leadership lasts without renewal. */
 	public record Settings(String instanceId, Duration tick, Duration lease) {
 	}
 
