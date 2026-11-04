@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonRawValue;
 
 import dev.aguxis.conveyor.core.Schedule;
 
+/** JSON view of a {@link Schedule}, including when it fires next and when it last did. */
 public record ScheduleResponse(
 		String name,
 		String cron,

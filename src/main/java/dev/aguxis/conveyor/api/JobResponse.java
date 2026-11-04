@@ -7,11 +7,12 @@ import com.fasterxml.jackson.annotation.JsonRawValue;
 import dev.aguxis.conveyor.core.Job;
 import dev.aguxis.conveyor.core.JobStatus;
 
+/** JSON view of a {@link Job}. Leaves out {@code updatedAt}, which only matters internally. */
 public record JobResponse(
 		long id,
 		String queue,
 		String type,
-		@JsonRawValue String payload,
+		@JsonRawValue String payload, // already JSON text, written as-is instead of as a quoted string
 		JobStatus status,
 		int priority,
 		int attempts,

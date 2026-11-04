@@ -20,10 +20,15 @@ import dev.aguxis.conveyor.core.CronScheduler;
 import dev.aguxis.conveyor.core.LeaderLease;
 import dev.aguxis.conveyor.core.ScheduleRepository;
 
+/**
+ * REST API for cron schedules, keyed by a name the client chooses. Also exposes which instance is the
+ * current scheduler leader, handy when running more than one.
+ */
 @RestController
 @RequestMapping("/api")
 class ScheduleController {
 
+	// names end up in URLs and in each firing's idempotency key, so keep them to safe characters
 	private static final String NAME = "[A-Za-z0-9._-]{1,100}";
 
 	private final ScheduleRepository schedules;
@@ -41,7 +46,7 @@ class ScheduleController {
 		try {
 			return ScheduleResponse.from(schedules.save(request.toNewSchedule(name)));
 		}
-		catch (IllegalArgumentException e) {
+		catch (IllegalArgumentException e) { // bad cron expression or unknown time zone
 			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
 		}
 	}
