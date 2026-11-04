@@ -16,6 +16,9 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
+ * Every SQL statement on the {@code jobs} table: enqueue, claim, the worker's state transitions and the
+ * read queries behind the API and dashboard.
+ * <p>
  * All timestamps are computed by Postgres ({@code now()}), never by the JVM, so workers on hosts with
  * skewed clocks still agree on when a job is due or a lease has expired.
  */
@@ -52,6 +55,7 @@ public class JobRepository {
 				.param("idempotencyKey", job.idempotencyKey())
 				.query(JOB_MAPPER)
 				.optional();
+		// DO NOTHING returns no row on a conflict, so the existing job has to be read separately
 		return inserted.orElseGet(() -> findByIdempotencyKey(job.idempotencyKey()).orElseThrow());
 	}
 
@@ -83,7 +87,7 @@ public class JobRepository {
 				   SET status = 'RUNNING',
 				       locked_by = :workerId,
 				       locked_until = now() + make_interval(secs => :leaseSeconds),
-				       attempts = attempts + 1,
+				       attempts = attempts + 1, -- counted at claim time, so a crash mid-run still uses up an attempt
 				       updated_at = now()
 				 WHERE id IN (
 				       SELECT id FROM jobs
@@ -101,7 +105,10 @@ public class JobRepository {
 				.list();
 	}
 
-	/** Extends the lease of jobs still held by {@code workerId}. Returns how many were extended. */
+	/**
+	 * Extends the lease of jobs still held by {@code workerId}. Returns how many were extended; fewer
+	 * than {@code ids.size()} means some of them were already finished or taken over by someone else.
+	 */
 	public int heartbeat(String workerId, Collection<Long> ids, Duration lease) {
 		if (ids.isEmpty()) {
 			return 0;
@@ -117,7 +124,11 @@ public class JobRepository {
 				.update();
 	}
 
-	/** Returns false if the lease was lost (the job was re-claimed by another attempt). */
+	/**
+	 * Marks the job SUCCEEDED. Returns false if the lease was lost (the job was re-claimed by another
+	 * attempt). Like {@link #reschedule} and {@link #markDead}, the update only matches the exact attempt
+	 * that was claimed (see {@code fence} below).
+	 */
 	public boolean complete(Job job) {
 		return jdbc.sql("""
 				UPDATE jobs
@@ -129,6 +140,7 @@ public class JobRepository {
 				.update() == 1;
 	}
 
+	/** Puts a failed job back to PENDING, runnable again after {@code delay}. False if the lease was lost. */
 	public boolean reschedule(Job job, String error, Duration delay) {
 		return jdbc.sql("""
 				UPDATE jobs
@@ -142,6 +154,7 @@ public class JobRepository {
 				.update() == 1;
 	}
 
+	/** Gives up on a job that used all its attempts. False if the lease was lost. */
 	public boolean markDead(Job job, String error) {
 		return jdbc.sql("""
 				UPDATE jobs
@@ -206,6 +219,7 @@ public class JobRepository {
 	public List<Job> list(JobStatus status, String queue, int limit) {
 		return jdbc.sql("""
 				SELECT * FROM jobs
+				 -- the casts let Postgres type the parameter when it is null, otherwise it cannot infer it
 				 WHERE (CAST(:status AS text) IS NULL OR status = :status)
 				   AND (CAST(:queue AS text) IS NULL OR queue = :queue)
 				 ORDER BY id DESC
@@ -218,6 +232,7 @@ public class JobRepository {
 				.list();
 	}
 
+	/** Counts per status for every queue, in one pass over the table. */
 	public List<QueueStats> stats() {
 		return jdbc.sql("""
 				SELECT queue,
@@ -237,10 +252,15 @@ public class JobRepository {
 				.list();
 	}
 
+	/**
+	 * Parameters that pin an update to one specific attempt: same worker and same {@code attempts} value
+	 * as when it was claimed. If the lease expired and the job was claimed again, these no longer match.
+	 */
 	private static Map<String, Object> fence(Job job) {
 		return Map.of("id", job.id(), "workerId", job.lockedBy(), "attempt", job.attempts());
 	}
 
+	// fractional seconds for make_interval; a null delay means "now"
 	private static double seconds(Duration duration) {
 		return duration == null ? 0 : duration.toMillis() / 1000.0;
 	}
@@ -265,6 +285,7 @@ public class JobRepository {
 				instant(rs, "finished_at"));
 	}
 
+	// timestamptz comes back as OffsetDateTime; Instant is what the rest of the code uses
 	private static Instant instant(ResultSet rs, String column) throws SQLException {
 		OffsetDateTime value = rs.getObject(column, OffsetDateTime.class);
 		return value == null ? null : value.toInstant();

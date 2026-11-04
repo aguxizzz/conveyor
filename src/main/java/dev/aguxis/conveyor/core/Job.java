@@ -26,6 +26,7 @@ public record Job(
 		Instant updatedAt,
 		Instant finishedAt) {
 
+	/** True once this attempt was the last one allowed; a failure now sends the job to DEAD. */
 	public boolean attemptsExhausted() {
 		return attempts >= maxAttempts;
 	}
