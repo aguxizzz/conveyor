@@ -31,8 +31,10 @@ import dev.aguxis.conveyor.core.WorkerMetrics.Outcome;
 public class WorkerPool implements SmartLifecycle {
 
 	private static final Logger log = LoggerFactory.getLogger(WorkerPool.class);
+	// last_error is only for humans reading it; a full stack-trace-sized message would just bloat the row
 	private static final int MAX_ERROR_LENGTH = 4000;
 
+	/** One pool per queue; {@code workerId} identifies this process in {@code locked_by} and in metrics. */
 	public record Settings(
 			String workerId,
 			String queue,
@@ -48,7 +50,9 @@ public class WorkerPool implements SmartLifecycle {
 	private final RetryPolicy retryPolicy;
 	private final Settings settings;
 	private final WorkerMetrics metrics;
+	// jobs claimed and not yet finished, by id: drives the free-thread count and the heartbeat
 	private final Map<Long, Job> inFlight = new ConcurrentHashMap<>();
+	// monitors the poller waits on: one for "a thread freed up", the other for "new work was announced"
 	private final Object capacityChanged = new Object();
 	private final Object wakeUp = new Object();
 	private boolean wakeUpRequested; // guarded by wakeUp
@@ -228,6 +232,7 @@ public class WorkerPool implements SmartLifecycle {
 
 	private void awaitCapacity() throws InterruptedException {
 		synchronized (capacityChanged) {
+			// re-check under the lock: a job may have finished between pollLoop's check and here
 			if (inFlight.size() >= settings.concurrency()) {
 				capacityChanged.wait(settings.pollInterval().toMillis());
 			}
@@ -260,7 +265,7 @@ public class WorkerPool implements SmartLifecycle {
 		var counter = new AtomicInteger();
 		return r -> {
 			Thread t = new Thread(r, prefix + counter.incrementAndGet());
-			t.setDaemon(true);
+			t.setDaemon(true); // a stuck handler must not keep the JVM alive after stop() gives up on it
 			return t;
 		};
 	}
