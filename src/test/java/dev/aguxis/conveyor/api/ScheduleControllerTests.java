@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import dev.aguxis.conveyor.TestcontainersConfiguration;
 
+/** The schedules REST API, plus one end-to-end check that the app's own scheduler takes the lead and fires. */
 @SpringBootTest(properties = { "conveyor.worker.enabled=false", "conveyor.examples.enabled=false",
 		"conveyor.scheduler.tick=50ms" })
 @AutoConfigureMockMvc
