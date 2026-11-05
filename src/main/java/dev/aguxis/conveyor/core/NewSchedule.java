@@ -1,5 +1,6 @@
 package dev.aguxis.conveyor.core;
 
+/** A schedule as sent by the client, before it has computed run times. Saving one with an existing name replaces it. */
 public record NewSchedule(
 		String name,
 		String cron,

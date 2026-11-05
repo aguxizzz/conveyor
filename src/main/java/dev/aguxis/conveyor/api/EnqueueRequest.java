@@ -10,6 +10,10 @@ import tools.jackson.databind.JsonNode;
 
 import dev.aguxis.conveyor.core.NewJob;
 
+/**
+ * Body of {@code POST /api/jobs}. Everything but {@code type} is optional; {@link #toNewJob()} fills in
+ * the defaults, so the core never sees nulls from the HTTP layer.
+ */
 public record EnqueueRequest(
 		@NotBlank @Size(max = 200) String type,
 		JsonNode payload,
@@ -20,6 +24,7 @@ public record EnqueueRequest(
 		@Size(max = 200) String idempotencyKey) {
 
 	NewJob toNewJob() {
+		// payload stays raw JSON text all the way down: the core stores it as jsonb and never parses it
 		return new NewJob(
 				queue == null || queue.isBlank() ? "default" : queue,
 				type,

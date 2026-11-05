@@ -21,6 +21,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class LeaderLease {
 
+	/** Who leads right now, as shown by the API. */
 	public record Holder(String holder, long term, Instant expiresAt) {
 	}
 
@@ -90,6 +91,7 @@ public class LeaderLease {
 				.isPresent();
 	}
 
+	/** The current leader, or empty if the lease expired or was released and nobody took it yet. */
 	public Optional<Holder> current(String name) {
 		return jdbc.sql("SELECT holder, term, expires_at FROM leader_leases WHERE name = :name AND expires_at > now()")
 				.param("name", name)

@@ -22,6 +22,10 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import dev.aguxis.conveyor.TestcontainersConfiguration;
 
+/**
+ * Claiming, retries, leases and fencing, with pools built by hand per test (the app's own workers are off),
+ * so each test picks its handlers, concurrency and lease timings.
+ */
 @SpringBootTest(properties = { "conveyor.worker.enabled=false", "conveyor.examples.enabled=false" })
 @Import(TestcontainersConfiguration.class)
 class WorkerPoolTests {

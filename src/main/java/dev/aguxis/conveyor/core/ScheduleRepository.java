@@ -13,6 +13,10 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * SQL for the {@code schedules} table: CRUD for the API, plus the lock-and-advance steps that
+ * {@link CronScheduler} runs inside its firing transaction.
+ */
 @Repository
 public class ScheduleRepository {
 

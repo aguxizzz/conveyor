@@ -6,6 +6,10 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+/**
+ * Every {@code conveyor.*} setting, with its default. Durations accept Spring's format ({@code 30s},
+ * {@code 10m}, {@code 7d}).
+ */
 @ConfigurationProperties("conveyor")
 public record ConveyorProperties(@DefaultValue Worker worker, @DefaultValue Retry retry,
 		@DefaultValue Scheduler scheduler, @DefaultValue Retention retention) {
@@ -17,11 +21,15 @@ public record ConveyorProperties(@DefaultValue Worker worker, @DefaultValue Retr
 			// Fallback only while listen is on: it bounds the wait for delayed jobs, retries and missed notifications.
 			@DefaultValue("2s") Duration pollInterval,
 			@DefaultValue("true") boolean listen,
+			// a crashed worker's jobs are retried after at most this long
 			@DefaultValue("30s") Duration lease,
+			// well under the lease, so one or two failed heartbeats don't lose it
 			@DefaultValue("10s") Duration heartbeatInterval,
+			// how long stop() waits for running jobs before leaving them to lease expiry
 			@DefaultValue("20s") Duration shutdownTimeout) {
 	}
 
+	// backoff between attempts, see RetryPolicy
 	public record Retry(
 			@DefaultValue("2s") Duration base,
 			@DefaultValue("10m") Duration max) {

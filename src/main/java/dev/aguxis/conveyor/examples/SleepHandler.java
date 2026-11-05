@@ -8,7 +8,7 @@ import tools.jackson.databind.json.JsonMapper;
 import dev.aguxis.conveyor.core.Job;
 import dev.aguxis.conveyor.core.JobHandler;
 
-/** {@code demo.sleep} — simulates work: {@code {"ms": 500}}. */
+/** {@code demo.sleep}: simulates work, {@code {"ms": 500}}. Used by {@code scripts/load.sh}. */
 @Component
 @ConditionalOnProperty(name = "conveyor.examples.enabled", havingValue = "true", matchIfMissing = true)
 class SleepHandler implements JobHandler {

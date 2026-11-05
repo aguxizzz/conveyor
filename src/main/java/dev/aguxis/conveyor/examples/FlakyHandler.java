@@ -10,7 +10,11 @@ import tools.jackson.databind.json.JsonMapper;
 import dev.aguxis.conveyor.core.Job;
 import dev.aguxis.conveyor.core.JobHandler;
 
-/** {@code demo.flaky} — fails with probability {@code failRate} (default 0.5) to exercise retries. */
+/**
+ * {@code demo.flaky}: fails with probability {@code failRate} (default 0.5) to exercise retries.
+ * Example handlers ship with the app so it can be tried without writing code; turn them off with
+ * {@code conveyor.examples.enabled=false}.
+ */
 @Component
 @ConditionalOnProperty(name = "conveyor.examples.enabled", havingValue = "true", matchIfMissing = true)
 class FlakyHandler implements JobHandler {

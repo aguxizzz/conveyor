@@ -27,6 +27,10 @@ import dev.aguxis.conveyor.core.RetryPolicy;
 import dev.aguxis.conveyor.core.ScheduleRepository;
 import dev.aguxis.conveyor.core.WorkerPool;
 
+/**
+ * Wires the core classes, which know nothing about Spring config, from {@link ConveyorProperties}.
+ * The repositories are picked up by component scan; everything with a lifecycle or settings is built here.
+ */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(ConveyorProperties.class)
 @EnableScheduling
@@ -51,6 +55,7 @@ class ConveyorConfiguration {
 			RetryPolicy retryPolicy, MeterRegistry meterRegistry) {
 		var worker = properties.worker();
 		if (!worker.enabled()) {
+			// API-only instance: it still enqueues and serves the dashboard, it just never claims
 			return new WorkerPools(List.of());
 		}
 		List<WorkerPool> pools = worker.queues().stream()
@@ -100,6 +105,7 @@ class ConveyorConfiguration {
 		return new QueueMetrics(jobs, meterRegistry);
 	}
 
+	// only for readability in locked_by and logs; uniqueness comes from the UUID part
 	private static String hostname() {
 		try {
 			return InetAddress.getLocalHost().getHostName();

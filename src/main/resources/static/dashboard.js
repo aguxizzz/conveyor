@@ -1,5 +1,8 @@
 'use strict';
 
+// Single-page dashboard served by Spring Boot as a static file: polls the REST API every couple of
+// seconds and renders queues, jobs and schedules. No framework and no build step, on purpose.
+//
 // Everything shown here comes from the public API; job types, payloads and errors are client input,
 // so the page only ever inserts them as text (see h()), never as HTML.
 
@@ -16,8 +19,8 @@ const enqueueForm = $('enqueue-form');
 
 let paused = false;
 let timer = null;
-let generation = 0;
-let openJobId = null;
+let generation = 0; // id of the latest refresh; older ones drop their results (see refresh())
+let openJobId = null; // job shown in the details dialog, kept fresh by the refresh loop
 // Schedule name → time its delete confirmation expires. Kept here because the table is rebuilt on every refresh.
 const armedDeletes = new Map();
 let lastSchedules = [];
@@ -29,6 +32,7 @@ class ApiError extends Error {
 	}
 }
 
+// fetch wrapper: returns the parsed JSON body, or throws ApiError with the server's message on 4xx/5xx.
 async function api(path, options = {}) {
 	const res = await fetch(path, {
 		...options,
@@ -42,6 +46,8 @@ async function api(path, options = {}) {
 	return body;
 }
 
+// Tiny DOM builder: h('td', { class: 'mono' }, text). Children are appended as text nodes, never parsed
+// as HTML; attributes starting with "on" become event listeners.
 function h(tag, attrs, ...children) {
 	const el = document.createElement(tag);
 	for (const [key, value] of Object.entries(attrs ?? {})) {
@@ -54,6 +60,7 @@ function h(tag, attrs, ...children) {
 	return el;
 }
 
+// "in 5s" / "3m ago" for an ISO timestamp; the exact time goes in the tooltip (see time()).
 function relative(iso) {
 	if (!iso) return '—';
 	const seconds = (Date.parse(iso) - Date.now()) / 1000;

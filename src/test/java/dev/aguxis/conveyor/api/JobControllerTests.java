@@ -22,6 +22,7 @@ import com.jayway.jsonpath.JsonPath;
 
 import dev.aguxis.conveyor.TestcontainersConfiguration;
 
+/** The jobs REST API over a real database. Workers are off, so jobs stay exactly as the test left them. */
 @SpringBootTest(properties = { "conveyor.worker.enabled=false", "conveyor.examples.enabled=false" })
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)

@@ -24,6 +24,7 @@ public class WorkerPools implements SmartLifecycle {
 
 	@Override
 	public void stop() {
+		// in parallel so the shutdown timeouts of several queues overlap instead of adding up
 		pools.parallelStream().forEach(WorkerPool::stop);
 		running = false;
 	}

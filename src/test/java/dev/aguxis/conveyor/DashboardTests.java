@@ -13,6 +13,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
+/** Smoke test that the static dashboard files are served; the page itself is only tested by hand. */
 @SpringBootTest(properties = { "conveyor.worker.enabled=false", "conveyor.examples.enabled=false" })
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)

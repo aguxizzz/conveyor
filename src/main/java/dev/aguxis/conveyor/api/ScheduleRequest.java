@@ -8,6 +8,10 @@ import tools.jackson.databind.JsonNode;
 
 import dev.aguxis.conveyor.core.NewSchedule;
 
+/**
+ * Body of {@code PUT /api/schedules/{name}}. The name comes from the URL; the rest describes the cron
+ * and the job each firing enqueues. Defaults match {@link EnqueueRequest}.
+ */
 public record ScheduleRequest(
 		@NotBlank @Size(max = 100) String cron,
 		@Size(max = 100) String timeZone,
@@ -28,6 +32,6 @@ public record ScheduleRequest(
 				payload == null ? "{}" : payload.toString(),
 				priority == null ? 0 : priority,
 				maxAttempts == null ? 5 : maxAttempts,
-				enabled == null || enabled);
+				enabled == null || enabled); // a new schedule is on unless asked otherwise
 	}
 }

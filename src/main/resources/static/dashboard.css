@@ -1,3 +1,5 @@
+/* Dashboard styles. Colors live in the variables below; the dark theme only overrides those. */
+
 :root {
 	--bg: #f5f6f8;
 	--surface: #ffffff;

@@ -23,6 +23,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import dev.aguxis.conveyor.TestcontainersConfiguration;
 
+/**
+ * Leader election and firing with several {@link CronScheduler}s on one database, standing in for several
+ * instances. The app's own scheduler is off so the tests control exactly who competes.
+ */
 @SpringBootTest(properties = { "conveyor.worker.enabled=false", "conveyor.scheduler.enabled=false",
 		"conveyor.examples.enabled=false" })
 @Import(TestcontainersConfiguration.class)

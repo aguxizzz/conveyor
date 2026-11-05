@@ -2,6 +2,10 @@ package dev.aguxis.conveyor.core;
 
 import java.time.Duration;
 
+/**
+ * A job about to be enqueued, before it has an id or a row. {@link #of} gives the same defaults as the
+ * REST API, and the {@code with*} methods tweak one field at a time.
+ */
 public record NewJob(
 		String queue,
 		String type,
@@ -9,7 +13,7 @@ public record NewJob(
 		int priority,
 		int maxAttempts,
 		Duration delay,
-		String idempotencyKey) {
+		String idempotencyKey) { // null means no deduplication
 
 	public static NewJob of(String type, String payload) {
 		return new NewJob("default", type, payload, 0, 5, Duration.ZERO, null);

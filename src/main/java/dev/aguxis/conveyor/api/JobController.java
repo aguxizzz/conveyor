@@ -20,6 +20,10 @@ import dev.aguxis.conveyor.core.JobRepository;
 import dev.aguxis.conveyor.core.JobStatus;
 import dev.aguxis.conveyor.core.QueueStats;
 
+/**
+ * REST API over the jobs table: enqueue, inspect, retry dead jobs and per-queue stats. Thin on purpose,
+ * every rule (idempotency, leases, retries) lives in {@link JobRepository} and the worker pool.
+ */
 @RestController
 @RequestMapping("/api")
 class JobController {
@@ -30,6 +34,10 @@ class JobController {
 		this.jobs = jobs;
 	}
 
+	/**
+	 * Always answers 201, even when the idempotency key matched an existing job: the client gets that
+	 * job back, so a retried request looks exactly like the first one.
+	 */
 	@PostMapping("/jobs")
 	ResponseEntity<JobResponse> enqueue(@Valid @RequestBody EnqueueRequest request) {
 		var job = jobs.enqueue(request.toNewJob());

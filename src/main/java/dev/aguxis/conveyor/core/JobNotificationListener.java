@@ -36,6 +36,7 @@ public class JobNotificationListener implements SmartLifecycle {
 	public static final String CHANNEL = "conveyor_jobs";
 
 	private static final Logger log = LoggerFactory.getLogger(JobNotificationListener.class);
+	// how long each getNotifications call blocks; also bounds how long stop() waits for the loop to notice
 	private static final int RECEIVE_TIMEOUT_MILLIS = 500;
 	/** Idle connections can die without a TCP reset (NAT, firewalls); a query is the only way to notice. */
 	private static final Duration HEALTH_CHECK_INTERVAL = Duration.ofSeconds(30);
@@ -130,6 +131,7 @@ public class JobNotificationListener implements SmartLifecycle {
 			PGNotification[] notifications = pg.getNotifications(RECEIVE_TIMEOUT_MILLIS);
 			if (notifications != null && notifications.length > 0) {
 				for (PGNotification notification : notifications) {
+					// the payload is the queue name (see the V3 migration); queues without a pool here are ignored
 					WorkerPool pool = poolsByQueue.get(notification.getParameter());
 					if (pool != null) {
 						pool.wakeUp();
