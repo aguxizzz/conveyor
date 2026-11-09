@@ -98,6 +98,7 @@
 			<label>Priority <input name="priority" type="number" step="1" placeholder="0"></label>
 			<label>Max attempts <input name="maxAttempts" type="number" min="1" max="100" placeholder="5"></label>
 			<label>Delay (s) <input name="delaySeconds" type="number" min="0" placeholder="0"></label>
+			<label>Timeout (s) <input name="timeoutSeconds" type="number" min="1" placeholder="none"></label>
 			<label class="wide">Idempotency key <input name="idempotencyKey" maxlength="200" placeholder="optional"></label>
 		</div>
 		<p id="enqueue-error" class="error" hidden></p>

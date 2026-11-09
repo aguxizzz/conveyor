@@ -19,6 +19,8 @@ Postgres is already in most stacks; Conveyor makes it your job queue.
 - **Fencing tokens**: the attempt counter fences every state transition, so a "zombie" worker that
   wakes up after losing its lease cannot overwrite the result of the attempt that replaced it.
 - **Retries with full-jitter exponential backoff** and a dead-letter state (`DEAD`) with manual revive.
+- **Per-job timeouts**: an attempt that runs past its `timeoutSeconds` is interrupted and retried, so a
+  handler stuck on a call that never returns can't hold its job forever.
 - **Idempotent enqueue** via `idempotencyKey`: clients can safely retry the enqueue request itself.
 - **Instant pickup with `LISTEN/NOTIFY`**: a trigger announces new jobs, so idle workers claim them in
   ~3 ms instead of waiting for their next poll. Polling stays as the safety net, so a missed
@@ -130,6 +132,29 @@ channel, outside the connection pool, and wakes the pool for the named queue.
   by ~27% in the benchmark (still twice the drain rate). `conveyor.worker.listen=false` turns the
   listener off.
 
+## Timeouts
+
+Heartbeats keep a running job leased for as long as its worker is alive, which is what lets long jobs
+run safely, but it also means a handler that hangs (an HTTP call without a timeout, a lock that's never
+released) would keep its job `RUNNING` forever. A job enqueued with `timeoutSeconds` is limited to that
+much time per attempt:
+
+```bash
+curl -X POST localhost:8080/api/jobs -H 'Content-Type: application/json' \
+  -d '{"type":"demo.sleep","payload":{"ms":60000},"timeoutSeconds":5}'
+```
+
+- **Past the deadline the attempt fails** like a thrown exception: it's retried with backoff, or goes
+  to `DEAD` on its last attempt, with `Timed out after 5s` as its error. The job's thread is interrupted.
+- **Interrupting is only a request.** A handler that ignores it keeps its thread, and so its slot in
+  the worker, until it returns; that's visible as `conveyor_worker_in_flight` staying high. Its lease
+  is no longer extended, though, and whatever it reports when it finally returns is dropped, so it
+  can't overwrite the retry. The retry can run on another worker while the stuck attempt is still going:
+  one more reason for handlers to be idempotent.
+- **The handler and the timeout race to record the outcome**, and exactly one of them wins (a
+  compare-and-set per attempt), so an attempt that finishes right at its deadline is never counted twice.
+- No `timeoutSeconds` means no limit, as before. Schedules don't take one yet.
+
 ## Recurring jobs
 
 ```bash
@@ -195,6 +220,7 @@ Exposed at `/actuator/prometheus`. Two sources, on purpose:
 | Metric | Source | What it answers |
 |--------|--------|-----------------|
 | `conveyor_job_execution_seconds` (histogram; `queue`, `type`, `outcome`) | each worker | Throughput, failure rate and p95 per job type. `outcome` is `succeeded`, `retried`, `dead` or `lost` (finished after its lease was taken over). |
+| `conveyor_job_timeouts_total` (`queue`, `type`) | each worker | Attempts that ran past their timeout. |
 | `conveyor_job_pickup_latency_seconds` (histogram; `queue`) | each worker | How long a runnable job waits before a worker claims it. |
 | `conveyor_worker_in_flight`, `conveyor_worker_concurrency` | each worker | Utilization: are workers saturated? |
 | `conveyor_listener_connected` | each worker | 0 means wake-ups are down and pickup falls back to the poll interval. |
@@ -214,7 +240,7 @@ job types are client input, and must not be able to create unbounded time series
 
 | Method | Path                    | Description                                  |
 |--------|-------------------------|----------------------------------------------|
-| POST   | `/api/jobs`             | Enqueue (`type`, `payload`, `queue`, `priority`, `maxAttempts`, `delaySeconds`, `idempotencyKey`) |
+| POST   | `/api/jobs`             | Enqueue (`type`, `payload`, `queue`, `priority`, `maxAttempts`, `delaySeconds`, `idempotencyKey`, `timeoutSeconds`) |
 | GET    | `/api/jobs/{id}`        | Job details                                  |
 | GET    | `/api/jobs?status=&queue=&limit=` | List jobs                          |
 | POST   | `/api/jobs/{id}/retry`  | Revive a `DEAD` job                          |
@@ -271,3 +297,4 @@ The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbe
 - [x] Web dashboard
 - [x] Load test & benchmark write-up (jobs/sec vs. worker count)
 - [x] Retention: purge finished jobs in batches
+- [x] Per-job timeouts: interrupt and retry attempts that hang

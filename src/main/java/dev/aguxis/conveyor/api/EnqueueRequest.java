@@ -21,7 +21,8 @@ public record EnqueueRequest(
 		Integer priority,
 		@Min(1) @Max(100) Integer maxAttempts,
 		@Min(0) Long delaySeconds,
-		@Size(max = 200) String idempotencyKey) {
+		@Size(max = 200) String idempotencyKey,
+		@Min(1) Integer timeoutSeconds) {
 
 	NewJob toNewJob() {
 		// payload stays raw JSON text all the way down: the core stores it as jsonb and never parses it
@@ -32,6 +33,7 @@ public record EnqueueRequest(
 				priority == null ? 0 : priority,
 				maxAttempts == null ? 5 : maxAttempts,
 				Duration.ofSeconds(delaySeconds == null ? 0 : delaySeconds),
-				idempotencyKey);
+				idempotencyKey,
+				timeoutSeconds == null ? null : Duration.ofSeconds(timeoutSeconds));
 	}
 }

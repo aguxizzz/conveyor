@@ -50,7 +50,7 @@ public record Schedule(
 
 	NewJob jobForFiring() {
 		// no delay: the firing is already due when the scheduler gets to it
-		return new NewJob(queue, type, payload, priority, maxAttempts, null, firingKey());
+		return new NewJob(queue, type, payload, priority, maxAttempts, null, firingKey(), null);
 	}
 
 	private static ZoneId zone(String timeZone) {

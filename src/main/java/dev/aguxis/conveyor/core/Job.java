@@ -1,5 +1,6 @@
 package dev.aguxis.conveyor.core;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -7,6 +8,8 @@ import java.time.Instant;
  * <p>
  * {@code attempts} doubles as a fencing token: it is incremented on every claim, so a worker whose
  * lease expired (and whose job was re-claimed by someone else) can no longer complete or fail it.
+ * <p>
+ * {@code timeout} is the maximum run time of one attempt, or null for no limit.
  */
 public record Job(
 		long id,
@@ -17,6 +20,7 @@ public record Job(
 		int priority,
 		int attempts,
 		int maxAttempts,
+		Duration timeout,
 		Instant runAt,
 		String lockedBy,
 		Instant lockedUntil,

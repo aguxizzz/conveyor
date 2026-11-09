@@ -2,6 +2,7 @@ package dev.aguxis.conveyor.core;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -40,9 +41,9 @@ public class JobRepository {
 	@Transactional
 	public Job enqueue(NewJob job) {
 		Optional<Job> inserted = jdbc.sql("""
-				INSERT INTO jobs (queue, type, payload, priority, max_attempts, run_at, idempotency_key)
+				INSERT INTO jobs (queue, type, payload, priority, max_attempts, run_at, idempotency_key, timeout_seconds)
 				VALUES (:queue, :type, CAST(:payload AS jsonb), :priority, :maxAttempts,
-				        now() + make_interval(secs => :delaySeconds), :idempotencyKey)
+				        now() + make_interval(secs => :delaySeconds), :idempotencyKey, :timeoutSeconds)
 				ON CONFLICT (idempotency_key) DO NOTHING
 				RETURNING *
 				""")
@@ -53,6 +54,7 @@ public class JobRepository {
 				.param("maxAttempts", job.maxAttempts())
 				.param("delaySeconds", seconds(job.delay()))
 				.param("idempotencyKey", job.idempotencyKey())
+				.param("timeoutSeconds", job.timeout() == null ? null : job.timeout().toSeconds(), Types.INTEGER)
 				.query(JOB_MAPPER)
 				.optional();
 		// DO NOTHING returns no row on a conflict, so the existing job has to be read separately
@@ -275,6 +277,7 @@ public class JobRepository {
 				rs.getInt("priority"),
 				rs.getInt("attempts"),
 				rs.getInt("max_attempts"),
+				timeout(rs),
 				instant(rs, "run_at"),
 				rs.getString("locked_by"),
 				instant(rs, "locked_until"),
@@ -283,6 +286,12 @@ public class JobRepository {
 				instant(rs, "created_at"),
 				instant(rs, "updated_at"),
 				instant(rs, "finished_at"));
+	}
+
+	// NULL timeout_seconds means the job may run as long as it needs
+	private static Duration timeout(ResultSet rs) throws SQLException {
+		int seconds = rs.getInt("timeout_seconds");
+		return rs.wasNull() ? null : Duration.ofSeconds(seconds);
 	}
 
 	// timestamptz comes back as OffsetDateTime; Instant is what the rest of the code uses

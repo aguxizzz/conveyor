@@ -7,8 +7,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -24,6 +26,11 @@ import dev.aguxis.conveyor.core.WorkerMetrics.Outcome;
  * Only as many jobs are claimed as there are free threads, so a worker never holds leases on work it
  * isn't actually executing. While a job runs, its lease is periodically extended (heartbeat); if
  * this process dies, the lease expires and another worker picks the job up.
+ * <p>
+ * A job with a timeout that runs past it is failed (retried or dead, like a thrown exception) and its
+ * thread is interrupted. Interrupting is only a request: a handler that ignores it keeps its thread,
+ * and its slot, until it returns, but its lease is no longer extended and whatever it reports back
+ * afterwards is ignored.
  * <p>
  * When the queue is drained the poller sleeps for {@code pollInterval}, unless {@link #wakeUp()} is
  * called first (by {@link JobNotificationListener} when a job is enqueued).
@@ -50,8 +57,8 @@ public class WorkerPool implements SmartLifecycle {
 	private final RetryPolicy retryPolicy;
 	private final Settings settings;
 	private final WorkerMetrics metrics;
-	// jobs claimed and not yet finished, by id: drives the free-thread count and the heartbeat
-	private final Map<Long, Job> inFlight = new ConcurrentHashMap<>();
+	// attempts claimed and not yet finished, by job id: drives the free-thread count, the heartbeat and timeouts
+	private final Map<Long, Attempt> inFlight = new ConcurrentHashMap<>();
 	// monitors the poller waits on: one for "a thread freed up", the other for "new work was announced"
 	private final Object capacityChanged = new Object();
 	private final Object wakeUp = new Object();
@@ -60,7 +67,7 @@ public class WorkerPool implements SmartLifecycle {
 	private volatile boolean running;
 	private Thread poller;
 	private ExecutorService executor;
-	private ScheduledExecutorService heartbeats;
+	private ScheduledExecutorService timers; // heartbeats and timeouts
 
 	public WorkerPool(JobRepository jobs, JobHandlerRegistry handlers, RetryPolicy retryPolicy, Settings settings,
 			MeterRegistry meterRegistry) {
@@ -78,9 +85,9 @@ public class WorkerPool implements SmartLifecycle {
 		}
 		running = true;
 		executor = Executors.newFixedThreadPool(settings.concurrency(), namedThreads("conveyor-exec-"));
-		heartbeats = Executors.newSingleThreadScheduledExecutor(namedThreads("conveyor-heartbeat-"));
+		timers = Executors.newSingleThreadScheduledExecutor(namedThreads("conveyor-timers-"));
 		long hb = settings.heartbeatInterval().toMillis();
-		heartbeats.scheduleWithFixedDelay(this::heartbeat, hb, hb, TimeUnit.MILLISECONDS);
+		timers.scheduleWithFixedDelay(this::heartbeat, hb, hb, TimeUnit.MILLISECONDS);
 		poller = new Thread(this::pollLoop, "conveyor-poller-" + settings.queue());
 		poller.start();
 		log.info("Worker {} started on queue '{}' with concurrency {}", settings.workerId(), settings.queue(),
@@ -107,7 +114,7 @@ public class WorkerPool implements SmartLifecycle {
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
-		heartbeats.shutdownNow();
+		timers.shutdownNow();
 		log.info("Worker {} stopped", settings.workerId());
 	}
 
@@ -146,8 +153,9 @@ public class WorkerPool implements SmartLifecycle {
 				List<Job> claimed = jobs.claim(settings.queue(), settings.workerId(), free, settings.lease());
 				for (Job job : claimed) {
 					metrics.claimed(job);
-					inFlight.put(job.id(), job);
-					executor.execute(() -> run(job));
+					var attempt = new Attempt(job);
+					inFlight.put(job.id(), attempt);
+					executor.execute(() -> run(attempt));
 				}
 				if (claimed.size() < free) {
 					// Queue drained; back off. A full batch means there's probably more, so poll again now.
@@ -165,23 +173,35 @@ public class WorkerPool implements SmartLifecycle {
 		}
 	}
 
-	private void run(Job job) {
+	private void run(Attempt attempt) {
+		synchronized (attempt) {
+			attempt.thread = Thread.currentThread();
+		}
 		try {
-			execute(job, System.nanoTime());
+			execute(attempt, System.nanoTime());
 		}
 		catch (Exception e) {
 			// Reporting the outcome failed (e.g. DB down); the lease will expire and the job gets retried.
-			log.error("Worker {} could not record outcome of job {}", settings.workerId(), job.id(), e);
+			log.error("Worker {} could not record outcome of job {}", settings.workerId(), attempt.job.id(), e);
 		}
 		finally {
-			inFlight.remove(job.id());
+			synchronized (attempt) {
+				attempt.done = true; // from here on a timeout can't interrupt this thread, now free for other jobs
+			}
+			if (attempt.timeout != null) {
+				attempt.timeout.cancel(false);
+			}
+			// Clears an interrupt that arrived after the handler returned, so it doesn't hit the next job.
+			Thread.interrupted();
+			inFlight.remove(attempt.job.id());
 			synchronized (capacityChanged) {
 				capacityChanged.notifyAll();
 			}
 		}
 	}
 
-	private void execute(Job job, long startNanos) {
+	private void execute(Attempt attempt, long startNanos) {
+		Job job = attempt.job;
 		if (job.attempts() > job.maxAttempts()) {
 			// Only reachable when previous attempts died without reporting back (lease expiry).
 			boolean recorded = jobs.markDead(job, "Exceeded max attempts after lease expiry");
@@ -194,22 +214,68 @@ public class WorkerPool implements SmartLifecycle {
 			metrics.finished(knownType(job), recorded ? Outcome.DEAD : Outcome.LOST, startNanos);
 			return;
 		}
+		if (job.timeout() != null) {
+			attempt.timeout = timers.schedule(() -> timeOut(attempt, startNanos), job.timeout().toMillis(),
+					TimeUnit.MILLISECONDS);
+		}
 		Outcome outcome;
 		try {
 			handler.get().handle(job);
+			if (!attempt.settle()) {
+				log.warn("Job {} returned after timing out; its outcome was already recorded", job.id());
+				return;
+			}
 			outcome = jobs.complete(job) ? Outcome.SUCCEEDED : Outcome.LOST;
 		}
 		catch (Exception e) {
-			String error = truncate(e.getClass().getName() + ": " + e.getMessage());
-			if (job.attemptsExhausted()) {
-				log.warn("Job {} ({}) is dead after {} attempts: {}", job.id(), job.type(), job.attempts(), error);
-				outcome = jobs.markDead(job, error) ? Outcome.DEAD : Outcome.LOST;
+			if (!attempt.settle()) {
+				log.warn("Job {} threw after timing out; its outcome was already recorded", job.id());
+				return;
 			}
-			else {
-				outcome = jobs.reschedule(job, error, retryPolicy.delayFor(job.attempts())) ? Outcome.RETRIED
-						: Outcome.LOST;
+			outcome = fail(job, truncate(e.getClass().getName() + ": " + e.getMessage()));
+		}
+		record(job, outcome, startNanos);
+	}
+
+	/**
+	 * Runs on the timers thread once the job has run for its whole timeout. Does nothing if the handler
+	 * got to {@link Attempt#settle()} first; otherwise the handler loses that race, so whatever it
+	 * reports later is dropped instead of overwriting this failure.
+	 */
+	private void timeOut(Attempt attempt, long startNanos) {
+		if (!attempt.settle()) {
+			return;
+		}
+		Job job = attempt.job;
+		// Logged before the interrupt: the woken handler logs right away, and this line should come first.
+		log.warn("Job {} ({}) timed out after {}s on attempt {}", job.id(), job.type(), job.timeout().toSeconds(),
+				job.attempts());
+		synchronized (attempt) {
+			if (!attempt.done) {
+				attempt.thread.interrupt();
 			}
 		}
+		String error = "Timed out after " + job.timeout().toSeconds() + "s";
+		metrics.timedOut(job.type());
+		try {
+			record(job, fail(job, error), startNanos);
+		}
+		catch (Exception e) {
+			// No longer heartbeated, so the lease expires and another worker retries the job anyway.
+			log.error("Worker {} could not record timeout of job {}", settings.workerId(), job.id(), e);
+		}
+	}
+
+	/** Retries the job after a backoff, or marks it dead if this was its last attempt. */
+	private Outcome fail(Job job, String error) {
+		if (job.attemptsExhausted()) {
+			log.warn("Job {} ({}) is dead after {} attempts: {}", job.id(), job.type(), job.attempts(), error);
+			return jobs.markDead(job, error) ? Outcome.DEAD : Outcome.LOST;
+		}
+		return jobs.reschedule(job, error, retryPolicy.delayFor(job.attempts())) ? Outcome.RETRIED : Outcome.LOST;
+	}
+
+	private void record(Job job, Outcome outcome, long startNanos) {
 		if (outcome == Outcome.LOST) {
 			log.warn("Job {} finished but its lease was lost; another attempt owns it now", job.id());
 		}
@@ -223,7 +289,9 @@ public class WorkerPool implements SmartLifecycle {
 
 	private void heartbeat() {
 		try {
-			jobs.heartbeat(settings.workerId(), inFlight.keySet(), settings.lease());
+			// Timed-out jobs are left out: their outcome is recorded, even if the handler is still running.
+			List<Long> ids = inFlight.values().stream().filter(a -> !a.settled.get()).map(a -> a.job.id()).toList();
+			jobs.heartbeat(settings.workerId(), ids, settings.lease());
 		}
 		catch (Exception e) {
 			log.warn("Worker {} heartbeat failed", settings.workerId(), e);
@@ -259,6 +327,27 @@ public class WorkerPool implements SmartLifecycle {
 
 	private static String truncate(String s) {
 		return s.length() <= MAX_ERROR_LENGTH ? s : s.substring(0, MAX_ERROR_LENGTH);
+	}
+
+	/** One claimed job being executed by this worker. */
+	private static final class Attempt {
+
+		final Job job;
+		/** Set once, by whoever records the outcome first: the handler finishing, or its timeout. */
+		final AtomicBoolean settled = new AtomicBoolean();
+		/** Touched only by the executor thread running the job. */
+		ScheduledFuture<?> timeout;
+		/** Guarded by this; lets the timeout interrupt the job's thread only while it's still on this job. */
+		Thread thread;
+		boolean done;
+
+		Attempt(Job job) {
+			this.job = job;
+		}
+
+		boolean settle() {
+			return settled.compareAndSet(false, true);
+		}
 	}
 
 	private static ThreadFactory namedThreads(String prefix) {

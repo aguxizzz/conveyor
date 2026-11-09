@@ -281,6 +281,7 @@ function renderJob(job) {
 		['Queue', h('span', { class: 'mono' }, job.queue)],
 		['Attempts', `${job.attempts} of ${job.maxAttempts}`],
 		['Priority', job.priority],
+		['Timeout', job.timeoutSeconds ? `${job.timeoutSeconds} s` : 'none'],
 		['Run at', time(job.runAt)],
 		['Worker', job.lockedBy ? h('span', { class: 'mono' }, job.lockedBy) : '—'],
 		['Lease until', job.lockedUntil ? time(job.lockedUntil) : '—'],
@@ -339,6 +340,7 @@ enqueueForm.addEventListener('submit', async (event) => {
 				priority: numberOrNull(form.priority.value),
 				maxAttempts: numberOrNull(form.maxAttempts.value),
 				delaySeconds: numberOrNull(form.delaySeconds.value),
+				timeoutSeconds: numberOrNull(form.timeoutSeconds.value),
 				idempotencyKey: form.idempotencyKey.value.trim() || null,
 			}),
 		});

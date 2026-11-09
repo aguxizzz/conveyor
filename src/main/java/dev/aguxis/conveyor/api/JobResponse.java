@@ -17,6 +17,7 @@ public record JobResponse(
 		int priority,
 		int attempts,
 		int maxAttempts,
+		Long timeoutSeconds,
 		Instant runAt,
 		String lockedBy,
 		Instant lockedUntil,
@@ -27,7 +28,7 @@ public record JobResponse(
 
 	static JobResponse from(Job job) {
 		return new JobResponse(job.id(), job.queue(), job.type(), job.payload(), job.status(), job.priority(),
-				job.attempts(), job.maxAttempts(), job.runAt(), job.lockedBy(), job.lockedUntil(), job.lastError(),
+				job.attempts(), job.maxAttempts(), job.timeout() == null ? null : job.timeout().toSeconds(), job.runAt(), job.lockedBy(), job.lockedUntil(), job.lastError(),
 				job.idempotencyKey(), job.createdAt(), job.finishedAt());
 	}
 }

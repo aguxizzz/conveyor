@@ -2,6 +2,7 @@ package dev.aguxis.conveyor.core;
 
 import java.time.Duration;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -56,6 +57,15 @@ public class WorkerMetrics {
 	void claimed(Job job) {
 		Duration waited = Duration.between(job.runAt(), job.updatedAt());
 		pickupLatency.record(waited.isNegative() ? Duration.ZERO : waited);
+	}
+
+	/** Only called for jobs that have a handler, so {@code type} is safe as a tag. */
+	void timedOut(String type) {
+		Counter.builder("conveyor.job.timeouts")
+				.description("Job attempts that ran past their timeout")
+				.tags("queue", queue, "type", type)
+				.register(registry)
+				.increment();
 	}
 
 	/**
