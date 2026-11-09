@@ -7,6 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
@@ -213,6 +215,93 @@ class WorkerPoolTests {
 
 		await(() -> executions("slow", "lost") == 1, Duration.ofSeconds(5));
 		assertThat(jobs.findById(job.id()).orElseThrow().lockedBy()).isEqualTo("thief");
+	}
+
+	@Test
+	void jobPastItsTimeoutIsInterruptedAndRetried() {
+		var interrupted = new AtomicInteger();
+		startPool("w1", 1, handler("hangs", job -> {
+			try {
+				Thread.sleep(30_000);
+			}
+			catch (InterruptedException e) {
+				interrupted.incrementAndGet();
+				throw e;
+			}
+		}));
+
+		Job job = jobs.enqueue(NewJob.of("hangs", "{}").withMaxAttempts(2).withTimeout(Duration.ofSeconds(1)));
+
+		Job dead = awaitStatus(job.id(), JobStatus.DEAD);
+		assertThat(dead.attempts()).isEqualTo(2);
+		assertThat(dead.lastError()).isEqualTo("Timed out after 1s");
+		await(() -> interrupted.get() == 2, Duration.ofSeconds(5));
+		assertThat(executions("hangs", "retried")).isEqualTo(1);
+		assertThat(executions("hangs", "dead")).isEqualTo(1);
+		assertThat(meters.get("conveyor.job.timeouts").tag("type", "hangs").counter().count()).isEqualTo(2);
+	}
+
+	@Test
+	void handlerIgnoringTheInterruptCantOverwriteTheRetry() throws Exception {
+		var release = new CountDownLatch(1);
+		var firstReturned = new CountDownLatch(1);
+		JobHandler stubborn = handler("stubborn", job -> {
+			if (job.attempts() > 1) {
+				return;
+			}
+			// First attempt hangs and swallows interrupts, like code stuck in a call that ignores them.
+			boolean released = false;
+			while (!released) {
+				try {
+					released = release.await(1, TimeUnit.SECONDS);
+				}
+				catch (InterruptedException ignored) {
+					// Swallowed on purpose.
+				}
+			}
+			firstReturned.countDown();
+		});
+		startPool("a", 1, Duration.ofMillis(500), Duration.ofMillis(100), stubborn);
+
+		Job job = jobs.enqueue(NewJob.of("stubborn", "{}").withTimeout(Duration.ofSeconds(1)));
+		await(() -> jobs.findById(job.id()).orElseThrow().attempts() == 1, Duration.ofSeconds(5));
+		// "a" still has its only thread stuck, so the retry has to go to someone else.
+		startPool("b", 1, Duration.ofMillis(500), Duration.ofMillis(100), stubborn);
+
+		Job done = awaitStatus(job.id(), JobStatus.SUCCEEDED);
+		assertThat(done.attempts()).isEqualTo(2);
+		assertThat(done.lockedBy()).isNull();
+		assertThat(done.lastError()).isEqualTo("Timed out after 1s");
+
+		release.countDown();
+		assertThat(firstReturned.await(5, TimeUnit.SECONDS)).isTrue();
+		sleep(Duration.ofMillis(200));
+		// The stuck attempt's late return is dropped: not recorded as a success, nor as lost.
+		assertThat(executions("stubborn", "succeeded")).isEqualTo(1);
+		assertThat(executions("stubborn", "lost")).isZero();
+		assertThat(jobs.findById(job.id()).orElseThrow().attempts()).isEqualTo(2);
+	}
+
+	@Test
+	void jobFinishingWithinItsTimeoutIsNotAffected() {
+		var interrupts = new AtomicInteger();
+		startPool("w1", 1, handler("quick", job -> {
+			Thread.sleep(100);
+			if (Thread.currentThread().isInterrupted()) {
+				interrupts.incrementAndGet();
+			}
+		}));
+
+		Job first = jobs.enqueue(NewJob.of("quick", "{}").withTimeout(Duration.ofSeconds(1)));
+		awaitStatus(first.id(), JobStatus.SUCCEEDED);
+		// Past the first job's deadline: its timer must not fire, or interrupt the thread now running this one.
+		sleep(Duration.ofMillis(1_000));
+		Job second = jobs.enqueue(NewJob.of("quick", "{}"));
+
+		Job done = awaitStatus(second.id(), JobStatus.SUCCEEDED);
+		assertThat(done.attempts()).isEqualTo(1);
+		assertThat(interrupts).hasValue(0);
+		assertThat(meters.find("conveyor.job.timeouts").counter()).isNull();
 	}
 
 	// --- helpers ---------------------------------------------------------------------------------
