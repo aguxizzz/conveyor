@@ -89,7 +89,7 @@ class JobNotificationListenerTests {
 
 	@Test
 	void jobsForOtherQueuesDoNotWakeThePool() {
-		jobs.enqueue(new NewJob("other", "ok", "{}", 0, 5, Duration.ZERO, null));
+		jobs.enqueue(new NewJob("other", "ok", "{}", 0, 5, Duration.ZERO, null, null));
 		Job job = jobs.enqueue(NewJob.of("ok", "{}"));
 
 		awaitStatus(job.id(), JobStatus.SUCCEEDED);

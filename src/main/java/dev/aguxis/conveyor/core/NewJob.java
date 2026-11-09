@@ -13,21 +13,26 @@ public record NewJob(
 		int priority,
 		int maxAttempts,
 		Duration delay,
-		String idempotencyKey) { // null means no deduplication
+		String idempotencyKey, // null means no deduplication
+		Duration timeout) { // null means no limit per attempt
 
 	public static NewJob of(String type, String payload) {
-		return new NewJob("default", type, payload, 0, 5, Duration.ZERO, null);
+		return new NewJob("default", type, payload, 0, 5, Duration.ZERO, null, null);
 	}
 
 	public NewJob withQueue(String queue) {
-		return new NewJob(queue, type, payload, priority, maxAttempts, delay, idempotencyKey);
+		return new NewJob(queue, type, payload, priority, maxAttempts, delay, idempotencyKey, timeout);
 	}
 
 	public NewJob withMaxAttempts(int maxAttempts) {
-		return new NewJob(queue, type, payload, priority, maxAttempts, delay, idempotencyKey);
+		return new NewJob(queue, type, payload, priority, maxAttempts, delay, idempotencyKey, timeout);
 	}
 
 	public NewJob withIdempotencyKey(String idempotencyKey) {
-		return new NewJob(queue, type, payload, priority, maxAttempts, delay, idempotencyKey);
+		return new NewJob(queue, type, payload, priority, maxAttempts, delay, idempotencyKey, timeout);
+	}
+
+	public NewJob withTimeout(Duration timeout) {
+		return new NewJob(queue, type, payload, priority, maxAttempts, delay, idempotencyKey, timeout);
 	}
 }

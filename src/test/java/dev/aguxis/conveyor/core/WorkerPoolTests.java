@@ -170,7 +170,7 @@ class WorkerPoolTests {
 		var ran = new AtomicInteger();
 		startPool("w1", 1, handler("ok", job -> ran.incrementAndGet()));
 
-		Job job = jobs.enqueue(new NewJob("default", "ok", "{}", 0, 5, Duration.ofSeconds(1), null));
+		Job job = jobs.enqueue(new NewJob("default", "ok", "{}", 0, 5, Duration.ofSeconds(1), null, null));
 
 		sleep(Duration.ofMillis(500));
 		assertThat(ran).hasValue(0);

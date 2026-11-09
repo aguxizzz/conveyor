@@ -47,6 +47,7 @@ class JobControllerTests {
 				.andExpect(jsonPath("$.status").value("PENDING"))
 				.andExpect(jsonPath("$.priority").value(0))
 				.andExpect(jsonPath("$.maxAttempts").value(5))
+				.andExpect(jsonPath("$.timeoutSeconds").doesNotExist())
 				.andExpect(jsonPath("$.attempts").value(0)));
 
 		mvc.perform(get("/api/jobs/" + id))
@@ -70,6 +71,13 @@ class JobControllerTests {
 	}
 
 	@Test
+	void storesTheTimeout() throws Exception {
+		long id = idOf(enqueue("{\"type\": \"x\", \"timeoutSeconds\": 90}").andExpect(status().isCreated()));
+
+		mvc.perform(get("/api/jobs/" + id)).andExpect(jsonPath("$.timeoutSeconds").value(90));
+	}
+
+	@Test
 	void sameIdempotencyKeyReturnsTheExistingJob() throws Exception {
 		String body = "{\"type\": \"charge\", \"idempotencyKey\": \"order-42\"}";
 		long first = idOf(enqueue(body).andExpect(status().isCreated()));
@@ -86,6 +94,7 @@ class JobControllerTests {
 		enqueue("{\"type\": \"x\", \"maxAttempts\": 0}").andExpect(status().isBadRequest());
 		enqueue("{\"type\": \"x\", \"maxAttempts\": 101}").andExpect(status().isBadRequest());
 		enqueue("{\"type\": \"x\", \"delaySeconds\": -1}").andExpect(status().isBadRequest());
+		enqueue("{\"type\": \"x\", \"timeoutSeconds\": 0}").andExpect(status().isBadRequest());
 		enqueue("{\"type\": ").andExpect(status().isBadRequest());
 
 		assertThat(jdbc.sql("SELECT count(*) FROM jobs").query(Long.class).single()).isZero();
