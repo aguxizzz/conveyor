@@ -35,6 +35,10 @@ public class JobRepository {
 	/**
 	 * Inserts a job. If {@code idempotencyKey} is already taken, the existing job is returned instead,
 	 * so clients can safely retry the enqueue call itself.
+	 * <p>
+	 * Called inside the app's own transaction, it joins it: the job exists only if that transaction
+	 * commits, together with whatever else it wrote. Until then workers can't see it, and the wake-up
+	 * notification is held back by Postgres until the commit too.
 	 */
 	@Transactional
 	public Job enqueue(NewJob job) {
