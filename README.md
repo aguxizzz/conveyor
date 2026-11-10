@@ -83,7 +83,7 @@ scripts/load.sh 30 120             # 30 jobs/s for 2 minutes; try 100 to see the
 
 ![Conveyor dashboard](docs/dashboard.png)
 
-Every instance serves the dashboard at `/`. It's three static files (`src/main/resources/static`) with
+Every instance serves the dashboard at `/`. It's three static files (`conveyor-server/src/main/resources/static`) with
 no build step and no framework, using only the public API, so any instance shows the same queue: it
 all comes from the shared table.
 
@@ -287,7 +287,8 @@ or revived ones), that a backlog bigger than one batch goes in one sweep, that a
 without blocking, that two concurrent sweeps delete 5,000 jobs between them with no overlap, and that
 the query plan uses the index.
 
-The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbenchmark=true`.
+The throughput benchmark is opt-in:
+`./mvnw test -pl conveyor-server -am -Dtest=ThroughputBenchmark -Dsurefire.failIfNoSpecifiedTests=false -Dbenchmark=true`.
 
 ## Roadmap
 

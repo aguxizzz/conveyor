@@ -6,7 +6,7 @@ covers both, plus what `LISTEN/NOTIFY` wake-ups bought (latency) and what they c
 
 ## Setup
 
-[`ThroughputBenchmark`](src/test/java/dev/aguxis/conveyor/bench/ThroughputBenchmark.java) runs
+[`ThroughputBenchmark`](conveyor-server/src/test/java/dev/aguxis/conveyor/bench/ThroughputBenchmark.java) runs
 against a real PostgreSQL 17 in Testcontainers. Each simulated worker is a `WorkerPool` with its own
 connection pool (concurrency 8, plus poller and heartbeat connections), the same as a separate
 instance, so the database is the only thing they share. Jobs are pre-seeded, the clock runs from
@@ -14,7 +14,8 @@ worker start until the last job is `SUCCEEDED`, and each figure is the median of
 warm-up. Every run also asserts that **each job ran exactly once** (`attempts = 1` for every row).
 
 ```bash
-./mvnw test -Dtest=ThroughputBenchmark -Dbenchmark=true   # ~5 min; writes target/benchmark-results.md
+# ~5 min; writes conveyor-server/target/benchmark-results.md
+./mvnw test -pl conveyor-server -am -Dtest=ThroughputBenchmark -Dsurefire.failIfNoSpecifiedTests=false -Dbenchmark=true
 ```
 
 Machine: AMD Ryzen 3 2200G (4 cores, no SMT), 16 GB RAM, Linux, Java 17. Postgres and all workers
@@ -131,7 +132,7 @@ The fix has two parts:
    normal priority order instead of jumping ahead. Fencing is unchanged: the stale worker's
    `complete()` still fails, because the status, owner and attempt number no longer match.
 2. **The ready index matches the `ORDER BY` exactly**, including the `id` tie-breaker
-   ([`V2__claim_index_matches_order.sql`](src/main/resources/db/migration/V2__claim_index_matches_order.sql)).
+   ([`V2__claim_index_matches_order.sql`](conveyor-core/src/main/resources/db/conveyor/V2__claim_index_matches_order.sql)).
    Jobs enqueued in one burst share `run_at`, and without `id` Postgres still had to sort them all.
 
 After the fix:
