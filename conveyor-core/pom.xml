@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The queue: job model, the SQL behind it, workers, cron scheduler and the schema migrations. Built on
+  The queue: job model, the SQL behind it, workers, cron scheduler and the schema with its migrations. Built on
   plain Spring (JDBC, transactions, lifecycle) but not on Spring Boot; the starter does the wiring.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -32,6 +32,15 @@
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
+		</dependency>
+		<!-- applies the schema in src/main/resources/db/conveyor, see ConveyorSchema -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.slf4j</groupId>

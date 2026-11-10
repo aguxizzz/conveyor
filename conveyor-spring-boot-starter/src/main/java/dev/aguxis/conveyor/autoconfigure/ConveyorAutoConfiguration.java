@@ -16,6 +16,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProp
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -42,6 +43,9 @@ import dev.aguxis.conveyor.core.WorkerPool;
 		"org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
 		"org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration",
 		"org.springframework.boot.transaction.autoconfigure.TransactionAutoConfiguration",
+		// The app's own Flyway goes first: if conveyor's tables came first, a brand-new app database would
+		// look non-empty with no history to the app's Flyway, which then refuses to migrate it.
+		"org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration",
 		// so @ConditionalOnBean(MeterRegistry) below sees the app's registry when it has one
 		"org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration" })
 @ConditionalOnBean(DataSource.class)
@@ -53,20 +57,28 @@ public class ConveyorAutoConfiguration {
 	/** Identifies this process in worker ids and as scheduler leader. Unique per start, not per host. */
 	private final String instance = hostname() + "-" + UUID.randomUUID().toString().substring(0, 8);
 
+	@Bean
+	ConveyorSchemaInitializer conveyorSchemaInitializer(DataSource dataSource, ConveyorProperties properties) {
+		return new ConveyorSchemaInitializer(dataSource, properties.schema());
+	}
+
 	// JdbcClient.create goes through DataSourceUtils, so inside a @Transactional method it uses the
 	// connection already bound to that transaction instead of taking a new one from the pool.
 	// Bean names are prefixed so they can't clash with an app's own "jobRepository".
 	@Bean
+	@DependsOn("conveyorSchemaInitializer")
 	JobRepository conveyorJobRepository(DataSource dataSource) {
 		return new JobRepository(JdbcClient.create(dataSource));
 	}
 
 	@Bean
+	@DependsOn("conveyorSchemaInitializer")
 	ScheduleRepository conveyorScheduleRepository(DataSource dataSource) {
 		return new ScheduleRepository(JdbcClient.create(dataSource));
 	}
 
 	@Bean
+	@DependsOn("conveyorSchemaInitializer")
 	LeaderLease conveyorLeaderLease(DataSource dataSource) {
 		return new LeaderLease(JdbcClient.create(dataSource));
 	}

@@ -11,8 +11,15 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * {@code 10m}, {@code 7d}).
  */
 @ConfigurationProperties("conveyor")
-public record ConveyorProperties(@DefaultValue Worker worker, @DefaultValue Retry retry,
+public record ConveyorProperties(@DefaultValue Schema schema, @DefaultValue Worker worker, @DefaultValue Retry retry,
 		@DefaultValue Scheduler scheduler, @DefaultValue Retention retention) {
+
+	public record Schema(
+			// off when the tables are managed some other way, e.g. by copying the migrations into the app's own
+			@DefaultValue("true") boolean migrate,
+			// Flyway history for conveyor's migrations only, apart from the app's flyway_schema_history
+			@DefaultValue("conveyor_schema_history") String historyTable) {
+	}
 
 	public record Worker(
 			@DefaultValue("true") boolean enabled,
