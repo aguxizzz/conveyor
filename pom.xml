@@ -26,6 +26,8 @@
 		<module>conveyor-spring-boot-starter</module>
 		<!-- standalone service: REST API and dashboard on top of the starter -->
 		<module>conveyor-server</module>
+		<!-- a small shop app using the starter, to show enqueue inside the app's own transaction -->
+		<module>conveyor-example</module>
 	</modules>
 
 	<properties>
