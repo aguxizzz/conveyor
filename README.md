@@ -4,8 +4,9 @@
 
 A distributed background-job queue for the JVM, backed only by PostgreSQL.
 
-Enqueue work over HTTP (or from Java), and any number of worker instances pick it up, run it with
-retries and exponential backoff, and survive crashes, without Redis, Kafka or RabbitMQ.
+Enqueue work over HTTP, or from inside your own Spring Boot app in the same transaction as your data,
+and any number of worker instances pick it up, run it with retries and exponential backoff, and
+survive crashes, without Redis, Kafka or RabbitMQ.
 Postgres is already in most stacks; Conveyor makes it your job queue.
 
 **Stack:** Java 17 · Spring Boot 4 · PostgreSQL 17 · Flyway · JdbcClient · Micrometer · Prometheus · Grafana · Testcontainers · Docker · GitHub Actions
@@ -22,6 +23,8 @@ Postgres is already in most stacks; Conveyor makes it your job queue.
 - **Per-job timeouts**: an attempt that runs past its `timeoutSeconds` is interrupted and retried, so a
   handler stuck on a call that never returns can't hold its job forever.
 - **Idempotent enqueue** via `idempotencyKey`: clients can safely retry the enqueue request itself.
+- **Transactional enqueue**: as a Spring Boot starter inside your app, a job commits or rolls back
+  with the rows it belongs to, so there's no order without its email, nor an email for a failed order.
 - **Instant pickup with `LISTEN/NOTIFY`**: a trigger announces new jobs, so idle workers claim them in
   ~3 ms instead of waiting for their next poll. Polling stays as the safety net, so a missed
   notification only costs latency, never a job.
@@ -83,7 +86,7 @@ scripts/load.sh 30 120             # 30 jobs/s for 2 minutes; try 100 to see the
 
 ![Conveyor dashboard](docs/dashboard.png)
 
-Every instance serves the dashboard at `/`. It's three static files (`src/main/resources/static`) with
+Every instance serves the dashboard at `/`. It's three static files (`conveyor-server/src/main/resources/static`) with
 no build step and no framework, using only the public API, so any instance shows the same queue: it
 all comes from the shared table.
 
@@ -250,6 +253,47 @@ job types are client input, and must not be able to create unbounded time series
 | DELETE | `/api/schedules/{name}` | Delete a schedule                            |
 | GET    | `/api/scheduler/leader` | Current scheduler leader and term (404 if none) |
 
+## Using it inside your app
+
+The repo is four Maven modules:
+
+- `conveyor-core`: the queue (jobs, workers, scheduler, retention) and its schema. Plain Spring, no Boot.
+- `conveyor-spring-boot-starter`: auto-configuration that wires the core into any Spring Boot app.
+- `conveyor-server`: the standalone service with the REST API and dashboard, built on the starter.
+- `conveyor-example`: a small shop app that uses the starter the way another project would.
+
+With the starter, enqueueing is a method call on your own `DataSource`, so it can be part of a
+transaction you already have open:
+
+```java
+@Transactional
+long placeOrder(long productId, int quantity, String email) {
+    long orderId = insertOrder(productId, quantity, email);
+    jobs.enqueue(NewJob.of("order.confirm", "{\"orderId\": " + orderId + "}"));
+    decrementStock(productId, quantity);  // throws if out of stock: the order and the job roll back together
+    return orderId;
+}
+```
+
+Over HTTP that's impossible to get right: commit the order and then call the queue, and a crash in
+between loses the email; call the queue first, and a failed order still sends one. Here the job row is
+just another row in the transaction. Workers can't claim it before the commit, and the `LISTEN/NOTIFY`
+wake-up is held back by Postgres until then too, so a rolled-back job never wakes anyone.
+
+On start the starter creates its tables with Flyway, tracked in their own `conveyor_schema_history`,
+so they live next to the app's own migrations without sharing version numbers. Set
+`conveyor.schema.migrate=false` to manage them yourself. The workers, scheduler and retention run in
+the app too, each one can be turned off with its `conveyor.*.enabled` property.
+
+The example runs against a throwaway Postgres with `./mvnw -pl conveyor-example spring-boot:test-run`:
+
+```bash
+curl -X POST localhost:8090/orders -H 'Content-Type: application/json' \
+  -d '{"productId":1,"quantity":1,"email":"ana@example.com"}'   # 201, and the confirmation job runs
+curl -X POST localhost:8090/orders -H 'Content-Type: application/json' \
+  -d '{"productId":2,"quantity":1,"email":"ana@example.com"}'   # 409 out of stock: no order, no job
+```
+
 ## Writing a handler
 
 ```java
@@ -286,8 +330,13 @@ Retention tests check that only jobs past their status's retention are deleted (
 or revived ones), that a backlog bigger than one batch goes in one sweep, that a locked row is skipped
 without blocking, that two concurrent sweeps delete 5,000 jobs between them with no overlap, and that
 the query plan uses the index.
+Transactional enqueue tests roll back an app transaction that enqueued (no job left, its idempotency
+key free again) and check that a worker polling while the transaction is open can't claim the job.
+The example app's tests run the full order flow with real workers, and check that its Flyway and the
+starter's migrate a fresh database side by side.
 
-The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbenchmark=true`.
+The throughput benchmark is opt-in:
+`./mvnw test -pl conveyor-server -am -Dtest=ThroughputBenchmark -Dsurefire.failIfNoSpecifiedTests=false -Dbenchmark=true`.
 
 ## Roadmap
 
@@ -298,3 +347,4 @@ The throughput benchmark is opt-in: `./mvnw test -Dtest=ThroughputBenchmark -Dbe
 - [x] Load test & benchmark write-up (jobs/sec vs. worker count)
 - [x] Retention: purge finished jobs in batches
 - [x] Per-job timeouts: interrupt and retry attempts that hang
+- [x] Spring Boot starter with enqueue inside the app's own transaction
